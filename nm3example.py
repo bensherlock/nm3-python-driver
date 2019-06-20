@@ -6,7 +6,9 @@
 """Example program for using the Nm3 driver. """
 
 import serial
+import time
 from nm3driver import Nm3
+from nm3driver import MessagePacket
 
 def main():
     """Main Program Entry."""
@@ -25,8 +27,52 @@ def main():
     #addr = nm3_modem.get_address()
     #print('Get Address=' + '{:03d}'.format(addr))
 
-    tof = nm3_modem.get_time_of_flight(255)
-    print('Time of Flight=' + '{:.2f}'.format(tof) + 's')
+    addr = 2
+    # Speed of Sound.
+    # In dry air @ 20C = 343m/s.
+    # In water around 1500m/s.
+    # Note for both, temperature, salinity, pressure, etc. all affect the speed of sound.
+    # For more precise ranging please determine the correct local speed of sound.
+    speed_of_sound = 343.0
+    tof = nm3_modem.send_ping(addr)
+    range = tof * speed_of_sound
+    print('Time of Flight to ' '{:03d}'.format(addr) + ' = ' + '{:.4f}'.format(tof) + 's' + ' range = ' + '{:.4f}'.format(range) + 'm')
+
+
+    broadcast_message = 'Hello World.'
+    sent_bytes_count = nm3_modem.send_broadcast_message( broadcast_message.encode('utf-8') )
+    print('Sent Broadcast Message of ' + str(sent_bytes_count) + ' bytes')
+    
+    # Need a pause between transmissions for the modem to finish the last one
+    time.sleep(2.0)
+    
+    # Send a test request so the remote node sends a broadcast message that we'll look at below.
+    bytes_count = serial_port.write('$T002'.encode('utf-8'))
+    # Expecting '$T002\r\n' 7 bytes
+    resp = serial_port.read(7)
+
+    
+    # Receiving unicast and broadcast messages
+    while True:
+        # Periodically poll the serial port for bytes
+        nm3_modem.poll_receiver()
+        
+        # Periodically process any bytes received
+        nm3_modem.process_incoming_buffer()
+        
+        # Periodically check for received packets
+        if nm3_modem.has_received_packet():
+            message_packet = nm3_modem.get_received_packet()
+            
+            #payload_as_string = bytearray(message_packet.packet_payload)
+            #payload_as_string = str(payload_as_string)
+            
+            #print('Received a message packet: ' + 
+            #      MessagePacket.PACKETTYPE_NAMES[message_packet.packet_type] + 
+            #      ' src: ' + str(message_packet.source_address) + ' data: ' +
+            #      payload_as_string)
+        
+        
     
 if __name__ == '__main__':
     main()
