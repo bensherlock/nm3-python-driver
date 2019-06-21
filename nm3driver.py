@@ -2,6 +2,8 @@
 #
 # Python Driver for NM3
 #
+# This file is part of NM3 Python Driver. https://github.com/bensherlock/nm3-python-driver
+# (C) 2019 Benjamin Sherlock <benjamin.sherlock@ncl.ac.uk>
 #
 """Python driver for the NM3 over serial port."""
 
@@ -239,6 +241,9 @@ class Nm3:
 
     def __init__(self,
                  serial_port: serial.Serial):
+        """Constructor. 
+           Recommend that the serial port is created with a reasonable read timeout
+           e.g. 100ms has been used in testing."""
         self._serial_port = serial_port
         self._incoming_bytes_buffer = deque() # List/Deque of integers
         self._received_packet_parser = MessagePacketParser()

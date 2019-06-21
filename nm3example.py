@@ -2,6 +2,8 @@
 #
 # Example Usage of the Python Driver for NM V3
 #
+# This file is part of NM3 Python Driver. https://github.com/bensherlock/nm3-python-driver
+# (C) 2019 Benjamin Sherlock <benjamin.sherlock@ncl.ac.uk>
 #
 """Example program for using the Nm3 driver. """
 
@@ -12,6 +14,8 @@ from nm3driver import MessagePacket
 
 def main():
     """Main Program Entry."""
+    
+    # Serial Port is opened with a 100ms timeout for reading.
     serial_port = serial.Serial('/dev/ttyS4', 9600, 8, serial.PARITY_NONE, serial.STOPBITS_ONE, 0.1)
     nm3_modem = Nm3(serial_port)
 
