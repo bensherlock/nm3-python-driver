@@ -5,8 +5,8 @@
 #
 """Example program for using the Nm3 driver. """
 
-import serial
 import time
+import serial
 from nm3driver import Nm3
 from nm3driver import MessagePacket
 
@@ -17,7 +17,7 @@ def main():
 
     addr = nm3_modem.get_address()
     print('Get Address=' + '{:03d}'.format(addr))
-    
+
     voltage = nm3_modem.get_battery_voltage()
     print('Battery Voltage=' + '{:.2f}'.format(voltage) + 'V')
 
@@ -35,44 +35,44 @@ def main():
     # For more precise ranging please determine the correct local speed of sound.
     speed_of_sound = 343.0
     tof = nm3_modem.send_ping(addr)
-    range = tof * speed_of_sound
-    print('Time of Flight to ' '{:03d}'.format(addr) + ' = ' + '{:.4f}'.format(tof) + 's' + ' range = ' + '{:.4f}'.format(range) + 'm')
+    distance = tof * speed_of_sound
+    print('Time of Flight to ' '{:03d}'.format(addr) + ' = ' + '{:.4f}'.format(tof) + 's' +
+          ' distance = ' + '{:.4f}'.format(distance) + 'm')
 
 
     broadcast_message = 'Hello World.'
-    sent_bytes_count = nm3_modem.send_broadcast_message( broadcast_message.encode('utf-8') )
+    sent_bytes_count = nm3_modem.send_broadcast_message(broadcast_message.encode('utf-8'))
     print('Sent Broadcast Message of ' + str(sent_bytes_count) + ' bytes')
-    
+
     # Need a pause between transmissions for the modem to finish the last one
     time.sleep(2.0)
-    
+
     # Send a test request so the remote node sends a broadcast message that we'll look at below.
     bytes_count = serial_port.write('$T002'.encode('utf-8'))
     # Expecting '$T002\r\n' 7 bytes
     resp = serial_port.read(7)
 
-    
+
     # Receiving unicast and broadcast messages
     while True:
         # Periodically poll the serial port for bytes
         nm3_modem.poll_receiver()
-        
+
         # Periodically process any bytes received
         nm3_modem.process_incoming_buffer()
-        
+
         # Periodically check for received packets
         if nm3_modem.has_received_packet():
             message_packet = nm3_modem.get_received_packet()
-            
-            #payload_as_string = bytearray(message_packet.packet_payload)
-            #payload_as_string = str(payload_as_string)
-            
-            #print('Received a message packet: ' + 
-            #      MessagePacket.PACKETTYPE_NAMES[message_packet.packet_type] + 
-            #      ' src: ' + str(message_packet.source_address) + ' data: ' +
-            #      payload_as_string)
-        
-        
-    
+
+            payload_as_string = bytes(message_packet.packet_payload).decode('utf-8')
+
+            print('Received a message packet: ' +
+                  MessagePacket.PACKETTYPE_NAMES[message_packet.packet_type] +
+                  ' src: ' + str(message_packet.source_address) + ' data: ' +
+                  payload_as_string)
+
+
+
 if __name__ == '__main__':
     main()

@@ -135,15 +135,17 @@ class MessagePacketParser:
 
         return_flag = False
 
+        #print('next_byte: ' + bytes([next_byte]).decode('utf-8'))
+
         if self._parser_state == self.PARSERSTATE_IDLE:
 
-            if next_byte.decode('utf-8') == '#':
+            if bytes([next_byte]).decode('utf-8') == '#':
                 # Next state
                 self._parser_state = self.PARSERSTATE_TYPE
 
         elif self._parser_state == self.PARSERSTATE_TYPE:
 
-            if next_byte.decode('utf-8') == 'B':
+            if bytes([next_byte]).decode('utf-8') == 'B':
                 self._current_message_packet = MessagePacket()
                 self._current_message_packet.source_address = 0
                 self._current_message_packet.destination_address = None
@@ -154,7 +156,7 @@ class MessagePacketParser:
                 self._current_integer = 0
                 self._parser_state = self.PARSERSTATE_ADDRESS
 
-            elif next_byte.decode('utf-8') == 'U':
+            elif bytes([next_byte]).decode('utf-8') == 'U':
                 self._current_message_packet = MessagePacket()
                 self._current_message_packet.source_address = None
                 self._current_message_packet.destination_address = None
@@ -173,7 +175,7 @@ class MessagePacketParser:
             self._current_byte_counter = self._current_byte_counter - 1
 
             # Append the next ascii string integer digit
-            self._current_integer = (self._current_integer * 10) + int(next_byte.decode('utf-8'))
+            self._current_integer = (self._current_integer * 10) + int(bytes([next_byte]).decode('utf-8'))
 
             if self._current_byte_counter == 0:
                 self._current_message_packet.source_address = self._current_integer
@@ -185,7 +187,7 @@ class MessagePacketParser:
             self._current_byte_counter = self._current_byte_counter - 1
 
             # Append the next ascii string integer digit
-            self._current_integer = (self._current_integer * 10) + int(next_byte.decode('utf-8'))
+            self._current_integer = (self._current_integer * 10) + int(bytes([next_byte]).decode('utf-8'))
 
             if self._current_byte_counter == 0:
                 self._current_byte_counter = self._current_integer
@@ -238,7 +240,7 @@ class Nm3:
     def __init__(self,
                  serial_port: serial.Serial):
         self._serial_port = serial_port
-        self._incoming_bytes_buffer = deque()
+        self._incoming_bytes_buffer = deque() # List/Deque of integers
         self._received_packet_parser = MessagePacketParser()
         #self._received_packets = deque()
 
@@ -250,8 +252,7 @@ class Nm3:
         """Gets the NM3 Address (000-255)."""
 
         # Absorb any incoming bytes into the receive buffers to process later
-        while self._serial_port.in_waiting:
-            self._incoming_bytes_buffer.append(self._serial_port.read())
+        self.poll_receiver()
 
         # Clear the input buffer
         self._serial_port.reset_input_buffer()
@@ -293,8 +294,7 @@ class Nm3:
             return -1
 
         # Absorb any incoming bytes into the receive buffers to process later
-        while self._serial_port.in_waiting:
-            self._incoming_bytes_buffer.append(self._serial_port.read())
+        self.poll_receiver()
 
         # Clear the input buffer
         self._serial_port.reset_input_buffer()
@@ -330,8 +330,7 @@ class Nm3:
         """Gets the NM3 Battery Voltage."""
 
         # Absorb any incoming bytes into the receive buffers to process later
-        while self._serial_port.in_waiting:
-            self._incoming_bytes_buffer.append(self._serial_port.read())
+        self.poll_receiver()
 
         # Clear the input buffer
         self._serial_port.reset_input_buffer()
@@ -379,8 +378,7 @@ class Nm3:
             return -1
 
         # Absorb any incoming bytes into the receive buffers to process later
-        while self._serial_port.in_waiting:
-            self._incoming_bytes_buffer.append(self._serial_port.read())
+        self.poll_receiver()
 
         # Clear the input buffer
         self._serial_port.reset_input_buffer()
@@ -450,8 +448,7 @@ class Nm3:
             return -1
 
         # Absorb any incoming bytes into the receive buffers to process later
-        while self._serial_port.in_waiting:
-            self._incoming_bytes_buffer.append(self._serial_port.read())
+        self.poll_receiver()
 
         # Clear the input buffer
         self._serial_port.reset_input_buffer()
@@ -495,8 +492,7 @@ class Nm3:
             return -1
 
         # Absorb any incoming bytes into the receive buffers to process later
-        while self._serial_port.in_waiting:
-            self._incoming_bytes_buffer.append(self._serial_port.read())
+        self.poll_receiver()
 
         # Clear the input buffer
         self._serial_port.reset_input_buffer()
@@ -543,8 +539,7 @@ class Nm3:
             return -1
 
         # Absorb any incoming bytes into the receive buffers to process later
-        while self._serial_port.in_waiting:
-            self._incoming_bytes_buffer.append(self._serial_port.read())
+        self.poll_receiver()
 
         # Clear the input buffer
         self._serial_port.reset_input_buffer()
@@ -609,7 +604,8 @@ class Nm3:
 
         # Absorb any incoming bytes into the receive buffers to process later
         while self._serial_port.in_waiting:
-            self._incoming_bytes_buffer.append(self._serial_port.read())
+            a_byte = self._serial_port.read()[0] # as individual integer
+            self._incoming_bytes_buffer.append(a_byte)
 
         #return
 
@@ -619,7 +615,7 @@ class Nm3:
         """Process the bytes stored in the incoming buffer up to the max_bytes_count (0=ignore).
            Returns the number of bytes still awaiting processing.
         """
-        
+
         byte_count = 0
         while self._incoming_bytes_buffer:
             self._received_packet_parser.process(self._incoming_bytes_buffer.popleft())
