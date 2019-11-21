@@ -60,7 +60,9 @@ def main():
     #addr = nm3_modem.get_address()
     #print('Get Address=' + '{:03d}'.format(addr))
 
-    logfile = open(filename, 'w')
+    # 0=no buffer, 1=Line buffering, N=bytes buffering, None=system default
+    bufsize=1
+    logfile = open(filename, 'w', buffering=bufsize)
 
     # Send a test request so the remote node sends a broadcast message that we'll look at below.
     #bytes_count = serial_port.write('$T001'.encode('utf-8'))
@@ -86,7 +88,7 @@ def main():
     # Receiving unicast and broadcast messages
     while True:
         # Periodically poll the serial port for bytes
-        nm3_modem.poll_receiver()
+        nm3_modem.poll_receiver() # non-blocking
 
         # Periodically process any bytes received
         nm3_modem.process_incoming_buffer()
