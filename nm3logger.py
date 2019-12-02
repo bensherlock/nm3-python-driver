@@ -65,9 +65,9 @@ def main():
     logfile = open(filename, 'w', buffering=bufsize)
 
     # Send a test request so the remote node sends a broadcast message that we'll look at below.
-    bytes_count = serial_port.write('$T007'.encode('utf-8'))
+    #bytes_count = serial_port.write('$T007'.encode('utf-8'))
     # Expecting '$T002\r\n' 7 bytes
-    resp = serial_port.read(7)
+    #resp = serial_port.read(7)
 
     # Write the header row to the logfile
     # PacketId, Timestamp, PacketType (Broadcast/Unicast), Source Address, Destination Address,
