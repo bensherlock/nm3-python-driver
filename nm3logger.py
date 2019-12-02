@@ -65,9 +65,9 @@ def main():
     logfile = open(filename, 'w', buffering=bufsize)
 
     # Send a test request so the remote node sends a broadcast message that we'll look at below.
-    #bytes_count = serial_port.write('$T001'.encode('utf-8'))
+    bytes_count = serial_port.write('$T007'.encode('utf-8'))
     # Expecting '$T002\r\n' 7 bytes
-    #resp = serial_port.read(7)
+    resp = serial_port.read(7)
 
     # Write the header row to the logfile
     # PacketId, Timestamp, PacketType (Broadcast/Unicast), Source Address, Destination Address,
@@ -88,13 +88,14 @@ def main():
     # Receiving unicast and broadcast messages
     while True:
         # Periodically poll the serial port for bytes
-        nm3_modem.poll_receiver() # non-blocking
+        nm3_modem.poll_receiver_blocking() # blocking on first byte (or timeout)
+        #nm3_modem.poll_receiver() # non-blocking returns immediately if no bytes ready to read.
 
         # Periodically process any bytes received
         nm3_modem.process_incoming_buffer()
 
         # Periodically check for received packets
-        if nm3_modem.has_received_packet():
+        while nm3_modem.has_received_packet():
             message_packet = nm3_modem.get_received_packet()
 
             #payload_as_string = bytes(message_packet.packet_payload).decode('utf-8')

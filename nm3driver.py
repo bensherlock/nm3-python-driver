@@ -635,6 +635,24 @@ class Nm3:
             self._incoming_bytes_buffer.append(a_byte)
 
         #return
+		
+    def poll_receiver_blocking(self):
+        """Check the serial port and place bytes into incoming buffer for processing.
+		   Blocking on serial port read until bytes received or timeout. 
+        """
+
+        # First byte is blocking
+        some_bytes = self._serial_port.read() # Read one byte
+        if some_bytes:
+            a_byte = some_bytes[0]
+            self._incoming_bytes_buffer.append(a_byte)
+
+        # Absorb any incoming bytes into the receive buffers to process later
+        while self._serial_port.in_waiting:
+            a_byte = self._serial_port.read()[0] # as individual integer
+            self._incoming_bytes_buffer.append(a_byte)
+
+        #return
 
 
     def process_incoming_buffer(self,
