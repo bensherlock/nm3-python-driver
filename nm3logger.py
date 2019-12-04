@@ -35,6 +35,53 @@ import serial
 from nm3driver import Nm3
 from nm3driver import MessagePacket
 
+
+def write_header_line(the_file):
+    """Write the text header line to the given file."""
+    # Write the header row to the logfile
+    # PacketId, Timestamp, PacketType (Broadcast/Unicast), Source Address, Destination Address,
+    # PayloadLength, PayloadBytes(hex encoded) \r\n
+    the_file.write('PacketId,Timestamp,PacketType,SourceAddress,DestinationAddress,PayloadLength,')
+
+    # Hex encoded payload bytes
+    for i in range(0, 64):
+        the_file.write('PayloadBytes[' + str(i) + ']')
+        if i < 63:
+            the_file.write(',')
+
+    # Newline
+    the_file.write('\r\n')
+
+
+def write_packet_line(the_file, the_packet, packet_id):
+    """Write the text packet line to the given file."""
+    # Write to file
+    # PacketId, Timestamp, PacketType (Broadcast/Unicast), Source Address,
+    # Destination Address, PayloadLength, PayloadBytes(hex encoded) \r\n
+    the_file.write(str(packet_id) + ',')
+    dt_str = datetime.utcnow().isoformat() + 'Z'
+    the_file.write(dt_str + ',')
+    the_file.write(MessagePacket.PACKETTYPE_NAMES[the_packet.packet_type] + ',')
+    if the_packet.source_address:
+        the_file.write('{:03d}'.format(the_packet.source_address))
+    the_file.write(',')
+    if the_packet.destination_address:
+        the_file.write('{:03d}'.format(the_packet.destination_address))
+    the_file.write(',')
+    the_file.write('{:02d}'.format(len(the_packet.packet_payload)) + ',')
+
+    # Hex encoded payload bytes
+    for i in range(0, 64):
+        if i < len(the_packet.packet_payload):
+            the_file.write('0x' + '{:02x}'.format(the_packet.packet_payload[i]))
+        if i < 63:
+            the_file.write(',')
+
+    # Newline
+    the_file.write('\r\n')
+    
+
+
 def main():
     """Main Program Entry."""
     cmdline_parser = argparse.ArgumentParser(description='NM V3 Logger')
@@ -43,93 +90,90 @@ def main():
     # Serial Port
     cmdline_parser.add_argument('port', help='The serial port to connect to the NM V3.')
 
-    # Filename for logging
-    cmdline_parser.add_argument('filename', help='The filename to log to.')
+    # Filename root for logging - Rotates at start of each day (midnight UTC)
+    cmdline_parser.add_argument('filenameroot', help='The filename root to log to. {filenameroot}-20191204T161500.csv')
 
     # Parse the command line
     cmdline_args = cmdline_parser.parse_args()
 
     # Get Arguments
     port = cmdline_args.port
-    filename = cmdline_args.filename
+    filenameroot = cmdline_args.filenameroot
 
     # Serial Port is opened with a 100ms timeout for reading.
-    serial_port = serial.Serial(port, 9600, 8, serial.PARITY_NONE, serial.STOPBITS_ONE, 0.1)
-    nm3_modem = Nm3(serial_port)
+    #serial_port = serial.Serial(port, 9600, 8, serial.PARITY_NONE, serial.STOPBITS_ONE, 0.1)
+    with serial.Serial(port, 9600, 8, serial.PARITY_NONE, serial.STOPBITS_ONE, 0.1) as serial_port:
+        nm3_modem = Nm3(serial_port)
 
-    #addr = nm3_modem.get_address()
-    #print('Get Address=' + '{:03d}'.format(addr))
+        #addr = nm3_modem.get_address()
+        #print('Get Address=' + '{:03d}'.format(addr))
 
-    # 0=no buffer, 1=Line buffering, N=bytes buffering, None=system default
-    bufsize=1
-    logfile = open(filename, 'w', buffering=bufsize)
 
-    # Send a test request so the remote node sends a broadcast message that we'll look at below.
-    #bytes_count = serial_port.write('$T007'.encode('utf-8'))
-    # Expecting '$T002\r\n' 7 bytes
-    #resp = serial_port.read(7)
+        # Open a new logfile with current time
+        file_datetime = datetime.utcnow()
+        dt_str = file_datetime.strftime('%Y%m%dT%H%M%S')
+        filename = filenameroot + '-' + dt_str + '.csv'
 
-    # Write the header row to the logfile
-    # PacketId, Timestamp, PacketType (Broadcast/Unicast), Source Address, Destination Address,
-    # PayloadLength, PayloadBytes(hex encoded) \r\n
-    logfile.write('PacketId,Timestamp,PacketType,SourceAddress,DestinationAddress,PayloadLength,')
+        # 0=no buffer, 1=Line buffering, N=bytes buffering, None=system default
+        bufsize=1
+        logfile = open(filename, 'w', buffering=bufsize)
 
-    # Hex encoded payload bytes
-    for i in range(0, 64):
-        logfile.write('PayloadBytes[' + str(i) + ']')
-        if i < 63:
-            logfile.write(',')
+        # Write the header row to the logfile
+        write_header_line(logfile)
+        
+        
+        # Debug Code
+        # Send a test request so the remote node sends a broadcast message that we'll look at below.
+        #bytes_count = serial_port.write('$T007'.encode('utf-8'))
+        # Expecting '$T002\r\n' 7 bytes
+        #resp = serial_port.read(7)
+        
 
-    # Newline
-    logfile.write('\r\n')
+        packet_id = 0
 
-    packet_id = 0
+        # Receiving unicast and broadcast messages
+        while True:
+            # Check current time. We want to start a new logfile once the day changes.
+            current_datetime = datetime.utcnow()
+            if current_datetime.day != file_datetime.day:
+                # Start a new log file
+                logfile.close()
+                file_datetime = current_datetime
+                dt_str = file_datetime.strftime('%Y%m%dT%H%M%S')
+                filename = filenameroot + '-' + dt_str + '.csv'
+                
+                # 0=no buffer, 1=Line buffering, N=bytes buffering, None=system default
+                bufsize=1
+                logfile = open(filename, 'w', buffering=bufsize)
 
-    # Receiving unicast and broadcast messages
-    while True:
-        # Periodically poll the serial port for bytes
-        nm3_modem.poll_receiver_blocking() # blocking on first byte (or timeout)
-        #nm3_modem.poll_receiver() # non-blocking returns immediately if no bytes ready to read.
+                # Write the header row to the logfile
+                write_header_line(logfile)
+                
+                # Reset the packet id for the new file
+                packet_id = 0
+        
+        
+            # Periodically poll the serial port for bytes
+            nm3_modem.poll_receiver_blocking() # blocking on first byte (or timeout)
+            #nm3_modem.poll_receiver() # non-blocking returns immediately if no bytes ready to read.
 
-        # Periodically process any bytes received
-        nm3_modem.process_incoming_buffer()
+            # Periodically process any bytes received
+            nm3_modem.process_incoming_buffer()
 
-        # Periodically check for received packets
-        while nm3_modem.has_received_packet():
-            message_packet = nm3_modem.get_received_packet()
+            # Periodically check for received packets
+            while nm3_modem.has_received_packet():
+                message_packet = nm3_modem.get_received_packet()
 
-            #payload_as_string = bytes(message_packet.packet_payload).decode('utf-8')
-            #print('Received a message packet: ' +
-            #      MessagePacket.PACKETTYPE_NAMES[message_packet.packet_type] +
-            #      ' src: ' + str(message_packet.source_address) + ' data: ' +
-            #      payload_as_string)
+                #payload_as_string = bytes(message_packet.packet_payload).decode('utf-8')
+                #print('Received a message packet: ' +
+                #      MessagePacket.PACKETTYPE_NAMES[message_packet.packet_type] +
+                #      ' src: ' + str(message_packet.source_address) + ' data: ' +
+                #      payload_as_string)
 
-            # Write to file
-            # PacketId, Timestamp, PacketType (Broadcast/Unicast), Source Address,
-            # Destination Address, PayloadLength, PayloadBytes(hex encoded) \r\n
-            logfile.write(str(packet_id) + ',')
-            dt_str = datetime.utcnow().isoformat() + 'Z'
-            logfile.write(dt_str + ',')
-            logfile.write(MessagePacket.PACKETTYPE_NAMES[message_packet.packet_type] + ',')
-            if message_packet.source_address:
-                logfile.write('{:03d}'.format(message_packet.source_address))
-            logfile.write(',')
-            if message_packet.destination_address:
-                logfile.write('{:03d}'.format(message_packet.destination_address))
-            logfile.write(',')
-            logfile.write('{:02d}'.format(len(message_packet.packet_payload)) + ',')
-
-            # Hex encoded payload bytes
-            for i in range(0, 64):
-                if i < len(message_packet.packet_payload):
-                    logfile.write('0x' + '{:02x}'.format(message_packet.packet_payload[i]))
-                if i < 63:
-                    logfile.write(',')
-
-            # Newline
-            logfile.write('\r\n')
-
-            packet_id = packet_id + 1
+                # Write to file
+                write_packet_line(logfile, message_packet, packet_id)
+                
+                packet_id = packet_id + 1
 
 if __name__ == '__main__':
     main()
