@@ -38,7 +38,7 @@ def main():
     """Main Program Entry."""
     
     # Serial Port is opened with a 100ms timeout for reading.
-    serial_port = serial.Serial('/dev/ttyS4', 9600, 8, serial.PARITY_NONE, serial.STOPBITS_ONE, 0.1)
+    serial_port = serial.Serial('/dev/ttyS3', 9600, 8, serial.PARITY_NONE, serial.STOPBITS_ONE, 0.1)
     nm3_modem = Nm3(serial_port)
 
     addr = nm3_modem.get_address()
@@ -53,7 +53,7 @@ def main():
     #addr = nm3_modem.get_address()
     #print('Get Address=' + '{:03d}'.format(addr))
 
-    addr = 2
+    addr = 3
     # Speed of Sound.
     # In dry air @ 20C = 343m/s.
     # In water around 1500m/s.
@@ -74,7 +74,7 @@ def main():
     time.sleep(2.0)
 
     # Send a test request so the remote node sends a broadcast message that we'll look at below.
-    bytes_count = serial_port.write('$T002'.encode('utf-8'))
+    bytes_count = serial_port.write('$T003'.encode('utf-8'))
     # Expecting '$T002\r\n' 7 bytes
     resp = serial_port.read(7)
 
@@ -96,7 +96,8 @@ def main():
             print('Received a message packet: ' +
                   MessagePacket.PACKETTYPE_NAMES[message_packet.packet_type] +
                   ' src: ' + str(message_packet.source_address) + ' data: ' +
-                  payload_as_string)
+                  payload_as_string + ' timestamp_count: ' 
+                  + str(message_packet.packet_timestamp_count))
 
 
 

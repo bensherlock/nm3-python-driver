@@ -52,6 +52,7 @@ class MessagePacket:
         self._destination_address = None
         self._packet_type = None
         self._packet_payload = None
+        self._packet_timestamp_count = None
 
 
     def __call__(self):
@@ -112,12 +113,25 @@ class MessagePacket:
         self._packet_payload = packet_payload
 
 
+    @property
+    def packet_timestamp_count(self):
+        """Gets the packet timestamp count - an overflowing 32-bit counter at 24MHz."""
+        return self._packet_timestamp_count
+
+    @packet_timestamp_count.setter
+    def packet_timestamp_count(self,
+                       packet_timestamp_count):
+        """Sets the packet timestamp count - an overflowing 32-bit counter at 24MHz."""
+        self._packet_timestamp_count = packet_timestamp_count
+
+
 class MessagePacketParser:
     """Message Packet Parser takes bytes and uses a state machine to construct
        MessagePacket structures"""
 
     PARSERSTATE_IDLE, PARSERSTATE_TYPE, \
-    PARSERSTATE_ADDRESS, PARSERSTATE_LENGTH, PARSERSTATE_PAYLOAD = range(5)
+    PARSERSTATE_ADDRESS, PARSERSTATE_LENGTH, \
+    PARSERSTATE_PAYLOAD, PARSERSTATE_TIMESTAMPFLAG, PARSERSTATE_TIMESTAMP = range(7)
 
     PARSERSTATE_NAMES = {
         PARSERSTATE_IDLE: 'Idle',
@@ -125,10 +139,13 @@ class MessagePacketParser:
         PARSERSTATE_ADDRESS: 'Address',
         PARSERSTATE_LENGTH: 'Length',
         PARSERSTATE_PAYLOAD: 'Payload',
+        PARSERSTATE_TIMESTAMPFLAG: 'TimestampFlag',
+        PARSERSTATE_TIMESTAMP: 'Timestamp',
     }
 
     PARSERSTATES = (PARSERSTATE_IDLE, PARSERSTATE_TYPE,
-                    PARSERSTATE_ADDRESS, PARSERSTATE_LENGTH, PARSERSTATE_PAYLOAD)
+                    PARSERSTATE_ADDRESS, PARSERSTATE_LENGTH,
+                    PARSERSTATE_PAYLOAD, PARSERSTATE_TIMESTAMPFLAG, PARSERSTATE_TIMESTAMP)
 
     def __init__(self):
         self._parser_state = self.PARSERSTATE_IDLE
@@ -156,6 +173,11 @@ class MessagePacketParser:
         # Received Message Structures:
         # '#B25500' + payload bytes + '\r\n'
         # '#U00' + payload bytes + '\r\n'
+        # Or for some NM3 firmware versions:
+        # '#B25500' + payload bytes + 'T' + timestamp + '\r\n'
+        # '#U00' + payload bytes + 'T' + timestamp + '\r\n'
+        # Where timestamp is a 10 digit (fixed width) number representing a 32-bit counter value 
+        # on a 24 MHz clock which is latched when the synch waveform arrives 
 
         return_flag = False
 
@@ -175,6 +197,7 @@ class MessagePacketParser:
                 self._current_message_packet.destination_address = None
                 self._current_message_packet.packet_type = MessagePacket.PACKETTYPE_BROADCAST
                 self._current_message_packet.packet_payload = []
+                self._current_message_packet.packet_timestamp_count = 0
 
                 self._current_byte_counter = 3
                 self._current_integer = 0
@@ -186,6 +209,7 @@ class MessagePacketParser:
                 self._current_message_packet.destination_address = None
                 self._current_message_packet.packet_type = MessagePacket.PACKETTYPE_UNICAST
                 self._current_message_packet.packet_payload = []
+                self._current_message_packet.packet_timestamp_count = 0
 
                 self._current_byte_counter = 2
                 self._current_integer = 0
@@ -224,6 +248,33 @@ class MessagePacketParser:
 
             if self._current_byte_counter == 0:
                 # Completed this packet
+                #self._packet_queue.append(self._current_message_packet)
+                #self._current_message_packet = None
+                #return_flag = True
+                self._parser_state = self.PARSERSTATE_TIMESTAMPFLAG
+
+        elif self._parser_state == self.PARSERSTATE_TIMESTAMPFLAG:
+
+            if bytes([next_byte]).decode('utf-8') == 'T':
+                self._current_byte_counter = 10
+                self._current_integer = 0
+                self._parser_state = self.PARSERSTATE_TIMESTAMP
+            else:
+                # No timestamp on this message. Completed Packet
+                self._packet_queue.append(self._current_message_packet)
+                self._current_message_packet = None
+                return_flag = True
+                self._parser_state = self.PARSERSTATE_IDLE
+
+        elif self._parser_state == self.PARSERSTATE_TIMESTAMP:
+            self._current_byte_counter = self._current_byte_counter - 1
+
+            # Append the next ascii string integer digit
+            self._current_integer = (self._current_integer * 10) + int(bytes([next_byte]).decode('utf-8'))
+
+            if self._current_byte_counter == 0:
+                # Completed this packet
+                self._current_message_packet.packet_timestamp_count = self._current_integer
                 self._packet_queue.append(self._current_message_packet)
                 self._current_message_packet = None
                 return_flag = True
