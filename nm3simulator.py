@@ -31,15 +31,17 @@
 
 
 import argparse
+import random
 import serial
 import time
 
 class Nm3SimulatedNode:
     """A NM3 Simulated Node."""
 
-    def __init__(self, address=255, distance_m=1000.0, speed_of_sound=1500.0):
+    def __init__(self, address=255, distance_m=1000.0, probability=1.0, speed_of_sound=1500.0):
         self._address = address
         self._distance_m = distance_m
+        self._probability = probability
         self._speed_of_sound = speed_of_sound
 
     @property
@@ -57,6 +59,18 @@ class Nm3SimulatedNode:
     @distance_m.setter
     def distance_m(self, distance_m):
         self._distance_m = distance_m
+
+    @property
+    def probability(self):
+        return self._probability
+
+    @probability.setter
+    def probability(self, probability):
+        if probability > 1.0:
+            probability = 1.0
+        elif probability < 0.0:
+            probability = 0.0
+        self._probability = probability
 
     @property
     def speed_of_sound(self):
@@ -121,9 +135,9 @@ class Nm3Simulator:
     def __call__(self):
         return self
 
-    def add_nm3_simulated_node(self, address, distance_m, speed_of_sound=1500.0):
+    def add_nm3_simulated_node(self, address, distance_m, probability, speed_of_sound=1500.0):
         """Add a simulated node"""
-        node = Nm3SimulatedNode(address, distance_m, speed_of_sound)
+        node = Nm3SimulatedNode(address, distance_m, probability, speed_of_sound)
         self._nm3_simulated_nodes[address] = node
 
 
@@ -236,10 +250,17 @@ class Nm3Simulator:
                             # Check the simulated nodes
                             if address_to_ping in self._nm3_simulated_nodes:
                                 node = self._nm3_simulated_nodes[address_to_ping]
-                                delay_time = 2.0 * (node.distance_m / node.speed_of_sound)
-                                time.sleep(delay_time)
-                                timeval = int(delay_time * 16000.0)
-                                response_str = "#R" + "{:03d}".format(address_to_ping) + "T" + "{:05d}".format(timeval) + "\r\n"
+                                # Probability of arrival
+                                if random.random() < node.probability:
+                                    delay_time = 2.0 * (node.distance_m / node.speed_of_sound)
+                                    time.sleep(delay_time)
+                                    timeval = int(delay_time * 16000.0)
+                                    response_str = "#R" + "{:03d}".format(address_to_ping) + "T" + "{:05d}".format(timeval) + "\r\n"
+                                else:
+                                    # Timeout = "#TO\r\n"
+                                    delay_time = 4.0
+                                    time.sleep(delay_time)
+                                    response_str = "#T0" + "\r\n"
                             else:
                                 # Timeout = "#TO\r\n"
                                 delay_time = 4.0
@@ -306,14 +327,21 @@ class Nm3Simulator:
 
                         # If Ack
                         if self._message_type == 'M':
-                            # Then delay or timeout response - TODO
+                            # Then delay or timeout response
                             # Check the simulated nodes
                             if self._message_address in self._nm3_simulated_nodes:
                                 node = self._nm3_simulated_nodes[self._message_address]
-                                delay_time = 2.0 * (node.distance_m / node.speed_of_sound)
-                                time.sleep(delay_time)
-                                timeval = int(delay_time * 16000.0)
-                                response_str = "#R" + "{:03d}".format(self._message_address) + "T" + "{:05d}".format(timeval) + "\r\n"
+                                # Probability of arrival
+                                if random.random() < node.probability:
+                                    delay_time = 2.0 * (node.distance_m / node.speed_of_sound)
+                                    time.sleep(delay_time)
+                                    timeval = int(delay_time * 16000.0)
+                                    response_str = "#R" + "{:03d}".format(self._message_address) + "T" + "{:05d}".format(timeval) + "\r\n"
+                                else:
+                                    # Timeout = "#TO\r\n"
+                                    delay_time = 4.0
+                                    time.sleep(delay_time)
+                                    response_str = "#T0" + "\r\n"
                             else:
                                 # Timeout = "#TO\r\n"
                                 delay_time = 4.0
@@ -335,19 +363,22 @@ class Nm3Simulator:
 
 
 def node_parameter_parser(s):
-    """Expects arguments as (address,range)"""
+    """Expects arguments as (address,range,probability)"""
     try:
         vals = s.split(",")
         address = int(vals[0])
         range = float(vals[1])
-        return address, range
+        probability = float(vals[2])
+        return address, range, probability
     except:
-        raise argparse.ArgumentTypeError("Node parameters must be address,range")
+        raise argparse.ArgumentTypeError("Node parameters must be address,range,probability")
 
 def main():
     """Main Program Entry.
     Example usage python3 nm3simulator.py /dev/ttyS4 --nodes 007,1000.0 008,600.0"""
-    cmdline_parser = argparse.ArgumentParser(description='NM V3 Simulator')
+    cmdline_parser = argparse.ArgumentParser(description='NM V3 Simulator. '
+                                                         'Example usage python3 nm3simulator.py /dev/ttyS4 '
+                                                         '--nodes 007,1000.0,0.8 008,600.0,0.3')
 
     # Add Command Line Arguments
     # Serial Port
@@ -357,7 +388,7 @@ def main():
     cmdline_parser.add_argument('--address', help='The local node address on start.')
 
     # Simulated Nodes
-    cmdline_parser.add_argument('--nodes', help="Simulated Nodes as address,range.", dest="nodes",
+    cmdline_parser.add_argument('--nodes', help="Simulated Nodes as address,range,probability triples.", dest="nodes",
                                 type=node_parameter_parser, nargs='*')
 
     # Parse the command line
@@ -377,7 +408,7 @@ def main():
 
         if nodes:
             for n in nodes:
-                nm3_simulator.add_nm3_simulated_node(n[0], n[1])
+                nm3_simulator.add_nm3_simulated_node(n[0], n[1], n[2])
 
         nm3_simulator.run()
 
