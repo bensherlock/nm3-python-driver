@@ -32,7 +32,39 @@
 
 import argparse
 import serial
+import time
 
+class Nm3SimulatedNode:
+    """A NM3 Simulated Node."""
+
+    def __init__(self, address=255, distance_m=1000.0, speed_of_sound=1500.0):
+        self._address = address
+        self._distance_m = distance_m
+        self._speed_of_sound = speed_of_sound
+
+    @property
+    def address(self):
+        return self._address
+
+    @address.setter
+    def address(self, address):
+        self._address = address
+
+    @property
+    def distance_m(self):
+        return self._distance_m
+
+    @distance_m.setter
+    def distance_m(self, distance_m):
+        self._distance_m = distance_m
+
+    @property
+    def speed_of_sound(self):
+        return self._speed_of_sound
+
+    @speed_of_sound.setter
+    def speed_of_sound(self, speed_of_sound):
+        self._speed_of_sound = speed_of_sound
 
 
 
@@ -63,6 +95,7 @@ class Nm3Simulator:
                         SIMULATOR_STATE_MESSAGE_DATA)
 
 
+
     def __init__(self, input_stream, output_stream, local_address=255):
         """input_stream and output_stream implement the Bytes IO interface.
         Namely: readable()->bool, writeable()->bool, read(bytes) and write(bytes)."""
@@ -82,16 +115,26 @@ class Nm3Simulator:
         self._message_length = None
         self._message_bytes = None
 
+        # Simulated Nodes
+        self._nm3_simulated_nodes = {}
+
     def __call__(self):
         return self
+
+    def add_nm3_simulated_node(self, address, distance_m, speed_of_sound=1500.0):
+        """Add a simulated node"""
+        node = Nm3SimulatedNode(address, distance_m, speed_of_sound)
+        self._nm3_simulated_nodes[address] = node
+
 
     def run(self):
         """Run the simulator. Never returns."""
         while True:
             if self._input_stream.readable():
-                some_bytes = self._input_stream.read()  # Read - Blocking
+                some_bytes = self._input_stream.read()  # Read
 
                 if some_bytes:
+                    #print("Bytes received len(" + str(len(some_bytes)) + ")")
                     self.process_bytes(some_bytes)
 
     def process_bytes(self, some_bytes: bytes):
@@ -126,6 +169,7 @@ class Nm3Simulator:
 
                 elif bytes([b]).decode('utf-8') == 'B':
                     # Broadcast Message
+                    print("MessageType: B. Broadcast")
                     self._message_type = 'B'
                     self._current_byte_counter = 2
                     self._current_integer = 0
@@ -133,6 +177,7 @@ class Nm3Simulator:
 
                 elif bytes([b]).decode('utf-8') == 'U':
                     # Unicast Message
+                    print("MessageType: U. Unicast")
                     self._message_type = 'U'
                     self._current_byte_counter = 3
                     self._current_integer = 0
@@ -140,6 +185,7 @@ class Nm3Simulator:
 
                 elif bytes([b]).decode('utf-8') == 'M':
                     # Unicast with Ack Message
+                    print("MessageType: M. Unicast with Ack")
                     self._message_type = 'M'
                     self._current_byte_counter = 3
                     self._current_integer = 0
@@ -185,9 +231,21 @@ class Nm3Simulator:
                             response_str = "$P" + "{:03d}".format(address_to_ping) + "\r\n"
                             response_bytes = response_str.encode('utf-8')
                             self._output_stream.write(response_bytes)
-                            # Then delay or timeout response - TODO
-                            response_str = "#R" + "{:03d}".format(address_to_ping) + "T" + "{:05d}".format(0) + "\r\n"
-                            # Timeout = "#TO\r\n"
+
+                            # Then delay or timeout response
+                            # Check the simulated nodes
+                            if address_to_ping in self._nm3_simulated_nodes:
+                                node = self._nm3_simulated_nodes[address_to_ping]
+                                delay_time = 2.0 * (node.distance_m / node.speed_of_sound)
+                                time.sleep(delay_time)
+                                timeval = int(delay_time * 16000.0)
+                                response_str = "#R" + "{:03d}".format(address_to_ping) + "T" + "{:05d}".format(timeval) + "\r\n"
+                            else:
+                                # Timeout = "#TO\r\n"
+                                delay_time = 4.0
+                                time.sleep(delay_time)
+                                response_str = "#T0" + "\r\n"
+
                             response_bytes = response_str.encode('utf-8')
                             self._output_stream.write(response_bytes)
 
@@ -202,6 +260,7 @@ class Nm3Simulator:
 
                 if self._current_byte_counter == 0:
                     self._message_address = self._current_integer
+                    print("MessageAddress: " + str(self._message_address))
 
                     # Now the message length
                     self._current_byte_counter = 2
@@ -216,6 +275,7 @@ class Nm3Simulator:
 
                 if self._current_byte_counter == 0:
                     self._message_length = self._current_integer
+                    print("MessageLength: " + str(self._message_length))
 
                     # Now the Message Data
                     self._current_byte_counter = self._message_length
@@ -230,6 +290,7 @@ class Nm3Simulator:
                 self._message_bytes.append(b)
 
                 if self._current_byte_counter == 0:
+                    print("MessageData: " + str(self._message_bytes))
 
                     if self._output_stream and self._output_stream.writable():
                         # Immediate Response
@@ -238,14 +299,28 @@ class Nm3Simulator:
                             response_str = "$B" + "{:02d}".format(self._message_length)  + "\r\n"
                         else:
                             response_str = "$" + self._message_type + "{:03d}".format(self._message_address) + "{:02d}".format(self._message_length) +  "\r\n"
+
+                        print("Sending Response: " + response_str)
                         response_bytes = response_str.encode('utf-8')
                         self._output_stream.write(response_bytes)
 
                         # If Ack
                         if self._message_type == 'M':
                             # Then delay or timeout response - TODO
-                            response_str = "#R" + "{:03d}".format(self._message_address) + "T" + "{:05d}".format(0) + "\r\n"
-                            # Timeout = "#TO\r\n"
+                            # Check the simulated nodes
+                            if self._message_address in self._nm3_simulated_nodes:
+                                node = self._nm3_simulated_nodes[self._message_address]
+                                delay_time = 2.0 * (node.distance_m / node.speed_of_sound)
+                                time.sleep(delay_time)
+                                timeval = int(delay_time * 16000.0)
+                                response_str = "#R" + "{:03d}".format(self._message_address) + "T" + "{:05d}".format(timeval) + "\r\n"
+                            else:
+                                # Timeout = "#TO\r\n"
+                                delay_time = 4.0
+                                time.sleep(delay_time)
+                                response_str = "#T0" + "\r\n"
+
+                            print("Sending Response: " + response_str)
                             response_bytes = response_str.encode('utf-8')
                             self._output_stream.write(response_bytes)
 
@@ -259,15 +334,31 @@ class Nm3Simulator:
 
 
 
-
+def node_parameter_parser(s):
+    """Expects arguments as (address,range)"""
+    try:
+        vals = s.split(",")
+        address = int(vals[0])
+        range = float(vals[1])
+        return address, range
+    except:
+        raise argparse.ArgumentTypeError("Node parameters must be address,range")
 
 def main():
-    """Main Program Entry."""
+    """Main Program Entry.
+    Example usage python3 nm3simulator.py /dev/ttyS4 --nodes 007,1000.0 008,600.0"""
     cmdline_parser = argparse.ArgumentParser(description='NM V3 Simulator')
 
     # Add Command Line Arguments
     # Serial Port
     cmdline_parser.add_argument('port', help='The serial port to connect to.')
+
+    # Local Address
+    cmdline_parser.add_argument('--address', help='The local node address on start.')
+
+    # Simulated Nodes
+    cmdline_parser.add_argument('--nodes', help="Simulated Nodes as address,range.", dest="nodes",
+                                type=node_parameter_parser, nargs='*')
 
     # Parse the command line
     cmdline_args = cmdline_parser.parse_args()
@@ -275,10 +366,19 @@ def main():
     # Get Arguments
     port = cmdline_args.port
 
+    address = cmdline_args.address
+
+    nodes = cmdline_args.nodes
+
 
     # Serial Port is opened with a 100ms timeout for reading.
     with serial.Serial(port, 9600, 8, serial.PARITY_NONE, serial.STOPBITS_ONE, 0.1) as serial_port:
-        nm3_simulator = Nm3Simulator(serial_port, serial_port)
+        nm3_simulator = Nm3Simulator(serial_port, serial_port, local_address=address)
+
+        if nodes:
+            for n in nodes:
+                nm3_simulator.add_nm3_simulated_node(n[0], n[1])
+
         nm3_simulator.run()
 
 
