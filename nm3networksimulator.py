@@ -50,6 +50,7 @@ propagation modelling if that's what you're looking for. """
 import argparse
 import copy
 import json
+import math
 import serial
 import time
 from typing import Tuple, Union
@@ -234,8 +235,11 @@ class Nm3SimulatorController:
         self._network_address = network_address
         self._network_port = network_port
         self._socket = None
+        self._socket_poller = None
 
         self._nm3_simulator_nodes = {} # Map unique_id to node
+
+        self._scheduled_network_packets = []
 
     def __call__(self):
         return self
@@ -270,8 +274,46 @@ class Nm3SimulatorController:
         if unique_id in self._nm3_simulator_nodes:
             self._nm3_simulator_nodes[unique_id] = nm3_simulator_node
 
+    def calculate_propagation(self, nm3_simulator_source_node: Nm3SimulatorNode,
+                              nm3_simulator_destination_node: Nm3SimulatorNode):
+        """Calculate the propagation delay of acoustic packet from source to destination node.
+        Returns propagation_delay and probability. (probability will always be 1.0)."""
+        x0 = nm3_simulator_source_node.node_position_xy[0]
+        y0 = nm3_simulator_source_node.node_position_xy[1]
+        z0  = nm3_simulator_source_node.node_depth
+
+        x1 = nm3_simulator_destination_node.node_position_xy[0]
+        y1 = nm3_simulator_destination_node.node_position_xy[1]
+        z1 = nm3_simulator_destination_node.node_depth
+
+        # Please note: This is a **very** simplistic model to just get us started.
+        # Assuming no losses. And isovelocity. And no obstructions. And no multipath. And no noise.
+        # The joy of simulation.
+
+        straight_line_range = math.sqrt(((x1-x0)*(x1-x0)) +  ((y1-y0)*(y1-y0)) + ((z1-z0)*(z1-z0)))
+        speed_of_sound = 1500.0
+        propagation_delay = straight_line_range / speed_of_sound
+
+        return propagation_delay, 1.0
 
 
+
+
+
+    def schedule_network_packet(self, transmit_time, unique_id, network_packet):
+        """Schedule a network packet transmission."""
+        self._scheduled_network_packets.append( (transmit_time, unique_id, network_packet) )
+        self._scheduled_network_packets.sort(key=lambda tup: tup[0]) # sort by time
+
+    def next_scheduled_network_packet(self, current_time):
+        """Get the next scheduled network packet to be transmitted at the current time."""
+        if self._scheduled_network_packets and self._scheduled_network_packets[0][0] <= current_time:
+            scheduled_network_packet = self._scheduled_network_packets.pop(0)
+            unique_id = scheduled_network_packet[1]
+            network_packet = scheduled_network_packet[2]
+            return unique_id, network_packet
+
+        return None, None
 
 
     def start(self):
@@ -293,6 +335,8 @@ class Nm3SimulatorController:
             socket_string = "tcp://" + self._network_address + ":"+ str(self._network_port)
             print("Binding to: " + socket_string)
             self._socket.bind(socket_string)
+            self._socket_poller = zmq.Poller()
+            self._socket_poller.register(self._socket, zmq.POLLIN)
 
         while True:
             # Poll the socket
@@ -302,35 +346,59 @@ class Nm3SimulatorController:
             # 1. AcousticPacket: { FrameSynch: Up/Dn, Address: 0-255, Command: 0-3, PayloadLength: 0-64, PayloadBytes: bytes(0-64) }
             # 2. NodePacket: { PositionXY: {x: float, y: float}, Depth: float }
             # }
-            unique_id, network_message_json_bytes = self._socket.recv_multipart() #  blocking
-            network_message_json_str = network_message_json_bytes.decode('utf-8')
-            network_message_jason = json.loads(network_message_json_str)
+            # Poll the socket for incoming messages
+            # print("Checking socket poller")
+            sockets = dict(self._socket_poller.poll(1))
+            if self._socket in sockets:
+                unique_id, network_message_json_bytes = self._socket.recv_multipart() #  blocking
+                received_time = time.time()
+                network_message_json_str = network_message_json_bytes.decode('utf-8')
+                network_message_jason = json.loads(network_message_json_str)
 
-            print("Network Packet received from: " + str(unique_id) + " -- " + network_message_json_str)
+                #print("Network Packet received from: " + str(unique_id) + " -- " + network_message_json_str)
 
-            if not self.has_nm3_simulator_node(unique_id):
-                self.add_nm3_simulator_node(unique_id)
+                if not self.has_nm3_simulator_node(unique_id):
+                    self.add_nm3_simulator_node(unique_id)
 
-            if "NodePacket" in network_message_jason:
-                nm3_simulator_node = self.get_nm3_simulator_node(unique_id)
-                if nm3_simulator_node:
-                    node_packet = NodePacket.from_json(network_message_jason["NodePacket"])
-                    nm3_simulator_node.node_position_xy = node_packet.position_xy
-                    nm3_simulator_node.node_depth = node_packet.depth
-                    self.update_nm3_simulator_node(nm3_simulator_node)
+                if "NodePacket" in network_message_jason:
+                    nm3_simulator_node = self.get_nm3_simulator_node(unique_id)
+                    if nm3_simulator_node:
+                        node_packet = NodePacket.from_json(network_message_jason["NodePacket"])
+                        nm3_simulator_node.node_position_xy = node_packet.position_xy
+                        nm3_simulator_node.node_depth = node_packet.depth
+                        self.update_nm3_simulator_node(nm3_simulator_node)
 
-            if "AcousticPacket" in network_message_jason:
-                # Send to all nodes, except this one
-                # For now this is instant: no propagation, or probability, or filtering.
-                acoustic_packet = AcousticPacket.from_json(network_message_jason["AcousticPacket"])
-                # Process Channels and Scheduling of acoustic_packet
+                if "AcousticPacket" in network_message_jason:
+                    # Send to all nodes, except this one
+                    # For now this is instant: no propagation, or probability, or filtering.
+                    acoustic_packet = AcousticPacket.from_json(network_message_jason["AcousticPacket"])
+                    # Process Channels and Scheduling of acoustic_packet
+                    # This would need updating if the receiving node changes its position - work this out later.
 
-                new_network_message_jason = { "AcousticPacket": acoustic_packet.json() }
-                new_json_str = json.dumps(new_network_message_jason)
 
-                for socket_id in self._nm3_simulator_nodes:
-                    if socket_id != unique_id:
-                        self._socket.send_multipart([socket_id, new_json_str.encode('utf-8')])
+                    # Get source position Information
+                    nm3_simulator_source_node = self.get_nm3_simulator_node(unique_id)
+
+                    new_network_message_jason = {"AcousticPacket": acoustic_packet.json()}
+                    for socket_id in self._nm3_simulator_nodes:
+                        # Get destination position Information
+                        nm3_simulator_destination_node = self.get_nm3_simulator_node(socket_id)
+                        propagation_delay, probability = self.calculate_propagation(nm3_simulator_source_node, nm3_simulator_destination_node)
+
+                        # Calculate a transmit_time
+                        transmit_time = received_time + propagation_delay
+                        self.schedule_network_packet(transmit_time, socket_id, new_network_message_jason)
+
+
+            # Get next scheduled network Packet
+            socket_id, network_packet = self.next_scheduled_network_packet(time.time())
+            while socket_id:
+                new_json_str = json.dumps(network_packet)
+                #print("Sending scheduled network packet: " + str(socket_id) + " - " + new_json_str)
+                self._socket.send_multipart([socket_id, new_json_str.encode('utf-8')])
+                # Get next scheduled network Packet
+                socket_id, network_packet = self.next_scheduled_network_packet(time.time())
+
 
 
 
