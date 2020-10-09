@@ -57,6 +57,11 @@ from typing import Tuple, Union
 import sys
 import zmq
 
+def _debug_print(*args, **kwargs):
+    """File local debug printing"""
+    #print(*args, **kwargs)
+    pass
+
 class Nm3SimulatorNode:
     """NM3 Simulator Node Information held by the Nm3SimulatorController."""
 
@@ -165,6 +170,7 @@ class AcousticPacket:
         self._command = command
         self._payload_length = payload_length
         self._payload_bytes = payload_bytes
+
         
     @property
     def frame_synch(self):
@@ -241,6 +247,8 @@ class Nm3SimulatorController:
 
         self._scheduled_network_packets = []
 
+        self._startup_time = 1602256464 #time.time()
+
     def __call__(self):
         return self
 
@@ -300,9 +308,9 @@ class Nm3SimulatorController:
 
 
 
-    def schedule_network_packet(self, transmit_time, unique_id, network_packet):
+    def schedule_network_packet(self, transmit_time, unique_id, network_packet_json_string):
         """Schedule a network packet transmission."""
-        self._scheduled_network_packets.append( (transmit_time, unique_id, network_packet) )
+        self._scheduled_network_packets.append( (transmit_time, unique_id, network_packet_json_string) )
         self._scheduled_network_packets.sort(key=lambda tup: tup[0]) # sort by time
 
     def next_scheduled_network_packet(self, current_time):
@@ -310,8 +318,8 @@ class Nm3SimulatorController:
         if self._scheduled_network_packets and self._scheduled_network_packets[0][0] <= current_time:
             scheduled_network_packet = self._scheduled_network_packets.pop(0)
             unique_id = scheduled_network_packet[1]
-            network_packet = scheduled_network_packet[2]
-            return unique_id, network_packet
+            network_packet_json_string = scheduled_network_packet[2]
+            return unique_id, network_packet_json_string
 
         return None, None
 
@@ -338,6 +346,8 @@ class Nm3SimulatorController:
             self._socket_poller = zmq.Poller()
             self._socket_poller.register(self._socket, zmq.POLLIN)
 
+        last_poll_time = self._startup_time
+
         while True:
             # Poll the socket
             # Router socket so first frame of multi part message is an identifier for the client.
@@ -347,15 +357,16 @@ class Nm3SimulatorController:
             # 2. NodePacket: { PositionXY: {x: float, y: float}, Depth: float }
             # }
             # Poll the socket for incoming messages
-            # print("Checking socket poller")
-            sockets = dict(self._socket_poller.poll(1))
+            # _debug_print("Checking socket poller")
+            sockets = dict(self._socket_poller.poll(0))
             if self._socket in sockets:
-                unique_id, network_message_json_bytes = self._socket.recv_multipart() #  blocking
+                unique_id, network_message_json_bytes = self._socket.recv_multipart(zmq.DONTWAIT) #  blocking
                 received_time = time.time()
+                _debug_print("NetworkPacket received at: " + str(received_time-self._startup_time))
                 network_message_json_str = network_message_json_bytes.decode('utf-8')
                 network_message_jason = json.loads(network_message_json_str)
 
-                #print("Network Packet received from: " + str(unique_id) + " -- " + network_message_json_str)
+                #_debug_print("Network Packet received from: " + str(unique_id) + " -- " + network_message_json_str)
 
                 if not self.has_nm3_simulator_node(unique_id):
                     self.add_nm3_simulator_node(unique_id)
@@ -380,24 +391,32 @@ class Nm3SimulatorController:
                     nm3_simulator_source_node = self.get_nm3_simulator_node(unique_id)
 
                     new_network_message_jason = {"AcousticPacket": acoustic_packet.json()}
+                    new_network_message_json_str = json.dumps(new_network_message_jason)
                     for socket_id in self._nm3_simulator_nodes:
-                        # Get destination position Information
-                        nm3_simulator_destination_node = self.get_nm3_simulator_node(socket_id)
-                        propagation_delay, probability = self.calculate_propagation(nm3_simulator_source_node, nm3_simulator_destination_node)
+                        # Don't send to itself
+                        if socket_id != unique_id:
+                            # Get destination position Information
+                            nm3_simulator_destination_node = self.get_nm3_simulator_node(socket_id)
+                            propagation_delay, probability = self.calculate_propagation(nm3_simulator_source_node, nm3_simulator_destination_node)
 
-                        # Calculate a transmit_time
-                        transmit_time = received_time + propagation_delay
-                        self.schedule_network_packet(transmit_time, socket_id, new_network_message_jason)
+                            # Calculate a transmit_time
+                            transmit_time = received_time + propagation_delay
+                            self.schedule_network_packet(transmit_time, socket_id, new_network_message_json_str)
 
 
             # Get next scheduled network Packet
-            socket_id, network_packet = self.next_scheduled_network_packet(time.time())
+
+            socket_id, network_packet_json_str = self.next_scheduled_network_packet(time.time())
             while socket_id:
-                new_json_str = json.dumps(network_packet)
-                #print("Sending scheduled network packet: " + str(socket_id) + " - " + new_json_str)
-                self._socket.send_multipart([socket_id, new_json_str.encode('utf-8')])
+                #_debug_print("Sending scheduled network packet: " + str(socket_id) + " - " + new_json_str)
+                self._socket.send_multipart([socket_id, network_packet_json_str.encode('utf-8')])
+                sent_time = time.time()
+                _debug_print("NetworkPacket sent at: " + str(sent_time-self._startup_time))
+                _debug_print("Time Between Polling: " + str(sent_time-last_poll_time-self._startup_time))
                 # Get next scheduled network Packet
                 socket_id, network_packet = self.next_scheduled_network_packet(time.time())
+
+            last_poll_time = time.time() - self._startup_time
 
 
 
@@ -477,6 +496,10 @@ class Nm3VirtualModem:
         self._depth = depth
         self._position_information_updated = True
 
+        self._startup_time = 1602256464 #time.time()
+        self._received_time = None
+        self._sent_time = None
+
     def __call__(self):
         return self
 
@@ -527,30 +550,32 @@ class Nm3VirtualModem:
                 self.send_node_packet(node_packet)
 
             if self._input_stream and self._input_stream.readable():
-                #print("Checking input_stream")
+                #_debug_print("Checking input_stream")
                 some_bytes = self._input_stream.read()  # Read
 
                 if some_bytes:
-                    #print("some_bytes=" + str(some_bytes))
+                    #_debug_print("some_bytes=" + str(some_bytes))
                     self.process_bytes(some_bytes)
 
             # Poll the socket for incoming "acoustic" messages
-            #print("Checking socket poller")
-            sockets = dict(self._socket_poller.poll(1))
+            #_debug_print("Checking socket poller")
+            sockets = dict(self._socket_poller.poll(0))
             if self._socket in sockets:
-                network_message_json_bytes = self._socket.recv()
+                network_message_json_bytes = self._socket.recv(zmq.DONTWAIT)
+                self._received_time = time.time()
+                _debug_print("NetworkPacket received at: " + str(self._received_time-self._startup_time))
                 network_message_json_str = network_message_json_bytes.decode('utf-8')
                 network_message_jason = json.loads(network_message_json_str)
 
-               # print("Network Packet received: " + network_message_json_str)
+               # _debug_print("Network Packet received: " + network_message_json_str)
 
                 if "AcousticPacket" in network_message_jason:
                     # Process the AcousticPacket
                     acoustic_packet = AcousticPacket.from_json(network_message_jason["AcousticPacket"])
-                    self.process_acoustic_packet(acoustic_packet)
+                    self.process_acoustic_packet(acoustic_packet, self._received_time)
 
             # Check for timeout if awaiting an Ack
-            #print("Checking ack status")
+            #_debug_print("Checking ack status")
             if self._acoustic_state == self.ACOUSTIC_STATE_WAIT_ACK:
                 delay_time = time.time() - self._acoustic_ack_wait_time
                 if delay_time > 4.0:
@@ -568,18 +593,30 @@ class Nm3VirtualModem:
 
 
     def send_acoustic_packet(self, acoustic_packet: AcousticPacket):
-        """Send an AcousticPacket."""
+        """Send an AcousticPacket.
+        Returns time sent"""
         jason = { "AcousticPacket": acoustic_packet.json() }
         json_string = json.dumps(jason)
         self._socket.send(json_string.encode('utf-8'))
+        self._sent_time = time.time()
+        _debug_print("NetworkPacket sent at: " + str(self._sent_time-self._startup_time))
+        if self._received_time:
+            _debug_print("-Turnaround: " + str(self._sent_time-self._received_time))
+
+        return self._sent_time
 
     def send_node_packet(self, node_packet: NodePacket):
-        """Send a NodePacket."""
+        """Send a NodePacket.
+        Returns time sent"""
         jason = { "NodePacket": node_packet.json() }
         json_string = json.dumps(jason)
         self._socket.send(json_string.encode('utf-8'))
+        self._sent_time = time.time()
+        _debug_print("NetworkPacket sent at: " + str(self._sent_time-self._startup_time))
 
-    def process_acoustic_packet(self, acoustic_packet: AcousticPacket):
+        return self._sent_time
+
+    def process_acoustic_packet(self, acoustic_packet: AcousticPacket, received_time):
         """Process an AcousticPacket."""
         # State
         if self._acoustic_state == self.ACOUSTIC_STATE_WAIT_ACK:
@@ -589,7 +626,8 @@ class Nm3VirtualModem:
                 if acoustic_packet.address == self._acoustic_ack_wait_address:
                     # This is the Ack we are looking for.
                     if self._output_stream and self._output_stream.writable():
-                        delay_time = time.time() - self._acoustic_ack_wait_time
+                        delay_time = received_time - self._acoustic_ack_wait_time
+                        _debug_print("Ack delay_time: " + str(delay_time))
                         timeval = int(delay_time * 16000.0)
                         response_str = "#R" + "{:03d}".format(
                             acoustic_packet.address) + "T" + "{:05d}".format(timeval) + "\r\n"
@@ -719,7 +757,7 @@ class Nm3VirtualModem:
 
                 elif bytes([b]).decode('utf-8') == 'B':
                     # Broadcast Message
-                    #print("MessageType: B. Broadcast")
+                    #_debug_print("MessageType: B. Broadcast")
                     self._message_type = 'B'
                     self._current_byte_counter = 2
                     self._current_integer = 0
@@ -727,7 +765,7 @@ class Nm3VirtualModem:
 
                 elif bytes([b]).decode('utf-8') == 'U':
                     # Unicast Message
-                    #print("MessageType: U. Unicast")
+                    #_debug_print("MessageType: U. Unicast")
                     self._message_type = 'U'
                     self._current_byte_counter = 3
                     self._current_integer = 0
@@ -735,7 +773,7 @@ class Nm3VirtualModem:
 
                 elif bytes([b]).decode('utf-8') == 'M':
                     # Unicast with Ack Message
-                    #print("MessageType: M. Unicast with Ack")
+                    #_debug_print("MessageType: M. Unicast with Ack")
                     self._message_type = 'M'
                     self._current_byte_counter = 3
                     self._current_integer = 0
@@ -790,11 +828,9 @@ class Nm3VirtualModem:
                                 frame_synch=AcousticPacket.FRAMESYNCH_UP,
                                 address=address_to_ping,
                                 command=AcousticPacket.CMD_PING_REQ)
-                            self.send_acoustic_packet(acoustic_packet_to_send)
-
+                            self._acoustic_ack_wait_time = self.send_acoustic_packet(acoustic_packet_to_send)
                             self._acoustic_ack_wait_address = address_to_ping
                             self._acoustic_state = self.ACOUSTIC_STATE_WAIT_ACK
-                            self._acoustic_ack_wait_time = time.time() #  Start timer
 
                     # Return to Idle
                     self._simulator_state = self.SIMULATOR_STATE_IDLE
@@ -807,7 +843,7 @@ class Nm3VirtualModem:
 
                 if self._current_byte_counter == 0:
                     self._message_address = self._current_integer
-                    #print("MessageAddress: " + str(self._message_address))
+                    #_debug_print("MessageAddress: " + str(self._message_address))
 
                     # Now the message length
                     self._current_byte_counter = 2
@@ -822,7 +858,7 @@ class Nm3VirtualModem:
 
                 if self._current_byte_counter == 0:
                     self._message_length = self._current_integer
-                    #print("MessageLength: " + str(self._message_length))
+                    #_debug_print("MessageLength: " + str(self._message_length))
 
                     # Now the Message Data
                     self._current_byte_counter = self._message_length
@@ -837,7 +873,7 @@ class Nm3VirtualModem:
                 self._message_bytes.append(b)
 
                 if self._current_byte_counter == 0:
-                    #print("MessageData: " + str(self._message_bytes))
+                    #_debug_print("MessageData: " + str(self._message_bytes))
 
                     if self._output_stream and self._output_stream.writable():
                         # Immediate Response
@@ -848,7 +884,7 @@ class Nm3VirtualModem:
                         else:
                             response_str = "$" + self._message_type + "{:03d}".format(self._message_address) + "{:02d}".format(self._message_length) +  "\r\n"
 
-                        #print("Sending Response: " + response_str)
+                        #_debug_print("Sending Response: " + response_str)
                         response_bytes = response_str.encode('utf-8')
                         self._output_stream.write(response_bytes)
                         self._output_stream.flush()
@@ -866,14 +902,13 @@ class Nm3VirtualModem:
                             command=acoustic_packet_command_to_send,
                             payload_length=len(self._message_bytes),
                             payload_bytes=self._message_bytes)
-                        self.send_acoustic_packet(acoustic_packet_to_send)
+                        self._acoustic_ack_wait_time =  self.send_acoustic_packet(acoustic_packet_to_send)
 
                         # If Ack
                         if self._message_type == 'M':
                             # Then delay or timeout response
                             self._acoustic_ack_wait_address = self._message_address
                             self._acoustic_state = self.ACOUSTIC_STATE_WAIT_ACK
-                            self._acoustic_ack_wait_time = time.time()  # Start timer
 
                     # Return to Idle
                     self._simulator_state = self.SIMULATOR_STATE_IDLE
