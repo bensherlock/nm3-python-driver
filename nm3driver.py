@@ -679,6 +679,7 @@ class Nm3:
     def poll_receiver(self):
         """Check the serial port and place bytes into incoming buffer for processing.
         """
+        # TODO - Replace with generic IO input
 
         # Absorb any incoming bytes into the receive buffers to process later
         while self._serial_port.in_waiting:
@@ -691,6 +692,7 @@ class Nm3:
         """Check the serial port and place bytes into incoming buffer for processing.
 		   Blocking on serial port read until bytes received or timeout. 
         """
+        # TODO - Replace with generic IO input
 
         # First byte is blocking
         some_bytes = self._serial_port.read() # Read one byte

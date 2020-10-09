@@ -50,6 +50,7 @@ propagation modelling if that's what you're looking for. """
 import argparse
 import copy
 import json
+import serial
 import time
 from typing import Tuple, Union
 import sys
@@ -462,6 +463,7 @@ class Nm3VirtualModem:
                 some_bytes = self._input_stream.read()  # Read
 
                 if some_bytes:
+                    #print("some_bytes=" + str(some_bytes))
                     self.process_bytes(some_bytes)
 
             # Poll the socket for incoming "acoustic" messages
@@ -828,6 +830,36 @@ def node_position_parser(s):
         raise argparse.ArgumentTypeError("Node parameters must be x,y,depth")
 
 
+from threading import Thread
+class TtyWrapper:
+
+    def __init__(self, stdin):
+        self._stdin = stdin
+        self._line = None
+
+        self._thread = Thread(target=self._poll_stdin)
+        self._thread.start()
+
+    def readable(self):
+        return self._stdin.readable()
+
+    def read(self):
+        bytes_input = None
+        if self._line:
+            bytes_input = self._line.encode('utf-8')
+            self._line = None
+            # Fire off another poll on stdin
+            self._thread = Thread(target=self._poll_stdin)
+            self._thread.start()
+
+        return bytes_input
+
+    def _poll_stdin(self):
+        if self._stdin:
+            self._line = self._stdin.readline()
+
+
+
 def main():
     """Main Program Entry."""
     cmdline_parser = argparse.ArgumentParser(
@@ -846,10 +878,10 @@ def main():
 
     # Mode
     cmdline_parser.add_argument('--mode',
-                                help='The operating mode: controller/terminal/headless.')
+                                help='The operating mode: controller/terminal/headless/serial.')
 
     # Serial Port
-    #cmdline_parser.add_argument('port', help='The serial port to connect to.')
+    cmdline_parser.add_argument('--serial_port', help='The serial port to connect to.')
 
     # Local Address
     cmdline_parser.add_argument('--address', help='The local node address on start.', type=int)
@@ -873,7 +905,7 @@ def main():
     if cmdline_args.position:
         position_xy, depth = cmdline_args.position
 
-    #port = cmdline_args.port
+    serial_port_name = cmdline_args.serial_port
 
     address = 255
     if cmdline_args.address:
@@ -894,8 +926,13 @@ def main():
     # Virtual NM3 Modem Mode (With stdin/stdout as interface)
     #
     elif mode == "terminal":
+        input_stream = sys.stdin.buffer # bytes from a piped input
+        if sys.stdin.isatty():
+            input_stream = TtyWrapper(sys.stdin) # wrapped to grab lines and convert to bytes
+
+        print("Starting NM3 Virtual Modem")
         # input_stream, output_stream, network_address=None, network_port=None, local_address=255, position_xy=(0.0,0.0), depth=10.0):
-        nm3_modem = Nm3VirtualModem(input_stream=sys.stdin.buffer,
+        nm3_modem = Nm3VirtualModem(input_stream=input_stream,
                                     output_stream=sys.stdout.buffer,
                                     network_address=network_address,
                                     network_port=network_port,
@@ -904,7 +941,7 @@ def main():
                                     depth=depth)
         nm3_modem.run()
     #
-    # Headless Virtual NM3 Modems Mode - A list of headless modems.
+    # Headless Virtual NM3 Modems Mode
     #
     elif mode == "headless":
         # input_stream, output_stream, network_address=None, network_port=None, local_address=255, position_xy=(0.0,0.0), depth=10.0):
@@ -917,14 +954,22 @@ def main():
                                     depth=depth)
         nm3_modem.run()
 
+    #
+    # Serial Port NM3 Virtual Modem Modem
+    #
+    elif mode == "serial":
+        # Serial Port is opened with a 100ms timeout for reading.
+        with serial.Serial(serial_port_name, 9600, 8, serial.PARITY_NONE, serial.STOPBITS_ONE, 0.1) as serial_port:
 
-    # Serial Port is opened with a 100ms timeout for reading.
-    #with serial.Serial(port, 9600, 8, serial.PARITY_NONE, serial.STOPBITS_ONE, 0.1) as serial_port:
-    #    nm3_simulator = Nm3Simulator(serial_port, serial_port, local_address=address)
-    #    if nodes:
-    #        for n in nodes:
-    #            nm3_simulator.add_nm3_simulated_node(n[0], n[1], n[2])
-    #    nm3_simulator.run()
+            # input_stream, output_stream, network_address=None, network_port=None, local_address=255, position_xy=(0.0,0.0), depth=10.0):
+            nm3_modem = Nm3VirtualModem(input_stream=serial_port,
+                                        output_stream=serial_port,
+                                        network_address=network_address,
+                                        network_port=network_port,
+                                        local_address=address,
+                                        position_xy=position_xy,
+                                        depth=depth)
+            nm3_modem.run()
 
 
 
