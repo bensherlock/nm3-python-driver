@@ -405,6 +405,7 @@ class Nm3SimulatorController:
 
 
             # Get next scheduled network Packet
+            # To be replaced with a separate scheduler.
 
             socket_id, network_packet_json_str = self.next_scheduled_network_packet(time.time())
             while socket_id:
@@ -473,6 +474,8 @@ class Nm3VirtualModem:
         self._acoustic_state = self.ACOUSTIC_STATE_IDLE
         self._acoustic_ack_wait_address = None
         self._acoustic_ack_wait_time = None
+
+        self._acoustic_ack_fixed_offset_time = 0.040 # 40ms
 
         self._network_address = network_address
         self._network_port = network_port
@@ -592,11 +595,15 @@ class Nm3VirtualModem:
 
 
 
-    def send_acoustic_packet(self, acoustic_packet: AcousticPacket):
+    def send_acoustic_packet(self, acoustic_packet: AcousticPacket, transmit_time=None):
         """Send an AcousticPacket.
         Returns time sent"""
         jason = { "AcousticPacket": acoustic_packet.json() }
         json_string = json.dumps(jason)
+        if transmit_time:
+            while time.time() < transmit_time:
+                pass
+
         self._socket.send(json_string.encode('utf-8'))
         self._sent_time = time.time()
         _debug_print("NetworkPacket sent at: " + str(self._sent_time-self._startup_time))
@@ -626,7 +633,7 @@ class Nm3VirtualModem:
                 if acoustic_packet.address == self._acoustic_ack_wait_address:
                     # This is the Ack we are looking for.
                     if self._output_stream and self._output_stream.writable():
-                        delay_time = received_time - self._acoustic_ack_wait_time
+                        delay_time = received_time - self._acoustic_ack_wait_time - self._acoustic_ack_fixed_offset_time
                         _debug_print("Ack delay_time: " + str(delay_time))
                         timeval = int(delay_time * 16000.0)
                         response_str = "#R" + "{:03d}".format(
@@ -644,10 +651,12 @@ class Nm3VirtualModem:
                     # CMD_PING_REQ, CMD_PING_REP, CMD_TEST_REQ, CMD_VBATT_REQ = range(4)
                     if acoustic_packet.command == AcousticPacket.CMD_PING_REQ:
                         # Ping request so send a reply
-                        acoustic_packet_to_send = AcousticPacket(frame_synch=AcousticPacket.FRAMESYNCH_DN,
-                                                                 address=self._local_address,
-                                                                 command=AcousticPacket.CMD_PING_REP)
-                        self.send_acoustic_packet(acoustic_packet_to_send)
+                        acoustic_packet_to_send = AcousticPacket(
+                            frame_synch=AcousticPacket.FRAMESYNCH_DN,
+                            address=self._local_address,
+                            command=AcousticPacket.CMD_PING_REP)
+                        self.send_acoustic_packet(acoustic_packet_to_send,
+                                                  (self._received_time + self._acoustic_ack_fixed_offset_time))
 
                     elif acoustic_packet.command == AcousticPacket.CMD_TEST_REQ:
                         # Test message acoustic message as a broadcast
@@ -697,7 +706,8 @@ class Nm3VirtualModem:
                             frame_synch=AcousticPacket.FRAMESYNCH_DN,
                             address=self._local_address,
                             command=AcousticPacket.CMD_PING_REP)
-                        self.send_acoustic_packet(acoustic_packet_to_send)
+                        self.send_acoustic_packet(acoustic_packet_to_send,
+                                                  (self._received_time + self._acoustic_ack_fixed_offset_time))
 
                         # Construct the bytes to be sent to the output_stream
                         # "#U..."
