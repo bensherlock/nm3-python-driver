@@ -534,7 +534,7 @@ class Nm3SimulatorController:
                     self.schedule_network_packet(local_transmit_time, socket_id,
                                                  new_network_message_json_str)
                     # IOLoop set the callback
-                    IOLoop.instance().call_at(local_transmit_time, self.check_for_packets_to_send)
+                    #IOLoop.instance().call_at(local_transmit_time, self.check_for_packets_to_send)
 
 
     def check_for_packets_to_send(self):
@@ -569,16 +569,16 @@ class Nm3SimulatorController:
             self._socket.bind(socket_string)
 
             # Polling version
-            #self._socket_poller = zmq.Poller()
-            #self._socket_poller.register(self._socket, zmq.POLLIN)
+            self._socket_poller = zmq.Poller()
+            self._socket_poller.register(self._socket, zmq.POLLIN)
 
             # Async version
             #self._socket_loop = IOLoop()
-            self._socket_stream = ZMQStream(self._socket)
-            self._socket_stream.on_recv(self.on_recv)
+            #self._socket_stream = ZMQStream(self._socket)
+            #self._socket_stream.on_recv(self.on_recv)
 
             #self._socket_loop.start()
-            IOLoop.instance().start() # Stays here
+            #IOLoop.instance().start() # Stays here
 
 
 
@@ -592,11 +592,11 @@ class Nm3SimulatorController:
             # }
             # Poll the socket for incoming messages
             # _debug_print("Checking socket poller")
-            #sockets = dict(self._socket_poller.poll(0))
-            #if self._socket in sockets:
+            sockets = dict(self._socket_poller.poll(1))
+            if self._socket in sockets:
                 #unique_id, network_message_json_bytes = self._socket.recv_multipart(zmq.DONTWAIT) #  blocking
-            #    msg = self._socket.recv_multipart(zmq.DONTWAIT)  # blocking
-            #    self.on_recv(msg)
+                msg = self._socket.recv_multipart(zmq.DONTWAIT)  # blocking
+                self.on_recv(msg)
 
             # Get next scheduled network Packet
             self.check_for_packets_to_send()
