@@ -51,7 +51,6 @@ import argparse
 import copy
 import json
 import math
-import ntplib
 import serial
 import time
 from typing import Tuple, Union
@@ -109,6 +108,105 @@ class Nm3SimulatorNode:
     @node_position_xy.setter
     def node_position_xy(self, node_position_xy: Tuple[float, float]):
         self._node_position_xy = node_position_xy
+
+
+class TimePacket:
+    """Time Packet Class"""
+
+    def __init__(self):
+        # There...
+        self._client_transmit_time = 0.0
+        self._server_arrival_time = 0.0
+        # ...and back again
+        self._server_transmit_time = 0.0
+        self._client_arrival_time = 0.0
+
+    def __call__(self):
+        return self
+
+    @property
+    def client_transmit_time(self):
+        return self._client_transmit_time
+    
+    @client_transmit_time.setter
+    def client_transmit_time(self, client_transmit_time):
+        self._client_transmit_time = client_transmit_time
+
+    @property
+    def server_arrival_time(self):
+        return self._server_arrival_time
+    
+    @server_arrival_time.setter
+    def server_arrival_time(self, server_arrival_time):
+        self._server_arrival_time = server_arrival_time
+
+    @property
+    def server_transmit_time(self):
+        return self._server_transmit_time
+    
+    @server_transmit_time.setter
+    def server_transmit_time(self, server_transmit_time):
+        self._server_transmit_time = server_transmit_time
+
+    @property
+    def client_arrival_time(self):
+        return self._client_arrival_time
+    
+    @client_arrival_time.setter
+    def client_arrival_time(self, client_arrival_time):
+        self._client_arrival_time = client_arrival_time
+
+
+    @property
+    def offset(self):
+        time_offset = (self._server_arrival_time - self._client_transmit_time) \
+                      + (self._server_transmit_time - self._client_arrival_time) / 2.0
+        return time_offset
+    
+    @property
+    def delay(self):
+        round_trip_delay = (self._client_arrival_time - self._client_transmit_time) \
+                           - (self._server_transmit_time - self._server_arrival_time)
+        return round_trip_delay
+
+
+    def calculate_offset(self):
+        """Calculate the offset."""
+        # Clock synchronization algorithm from
+        # https://en.wikipedia.org/wiki/Network_Time_Protocol
+        time_offset = (self._server_arrival_time - self._client_transmit_time) \
+                      + (self._server_transmit_time - self._client_arrival_time) / 2.0
+        round_trip_delay = (self._client_arrival_time - self._client_transmit_time) \
+                           - (self._server_transmit_time - self._server_arrival_time)
+        return time_offset
+
+    def json(self):
+        """Returns a json dictionary representation."""
+        jason = {"ClientTransmitTime": self._client_transmit_time,
+                 "ServerArrivalTime": self._server_arrival_time,
+                 "ServerTransmitTime": self._server_transmit_time,
+                 "ClientArrivalTime": self._client_arrival_time }
+        return jason
+
+    @staticmethod
+    def from_json(jason): # -> Union[TimePacket, None]:
+        time_packet = TimePacket()
+        time_packet.client_transmit_time = jason["ClientTransmitTime"]
+        time_packet.server_arrival_time = jason["ServerArrivalTime"]
+        time_packet.server_transmit_time = jason["ServerTransmitTime"]
+        time_packet.client_arrival_time = jason["ClientArrivalTime"]
+        return time_packet
+
+    def to_string(self):
+        return "TimePacket:" \
+               + "\n  client_transmit_time = " + str(self.client_transmit_time) \
+               + "\n  server_arrival_time  = " + str(self.server_arrival_time) \
+               + "\n  server_transmit_time = " + str(self.server_transmit_time) \
+               + "\n  client_arrival_time  = " + str(self.client_arrival_time) \
+               + "\n  offset               = " + str(self.offset) \
+               + "\n  delay                = " + str(self.delay)
+
+
 
 
 class NodePacket:
@@ -277,14 +375,6 @@ class Nm3SimulatorController:
     def __call__(self):
         return self
 
-    def get_ntp_update(self):
-        """Get NTP update."""
-        client = ntplib.NTPClient()
-        try:
-            response = client.request('0.pool.ntp.org')
-            self._ntp_offset = response.offset
-        except Exception:
-            print("Failed to get NTP info")
 
     def get_hamr_time(self, local_time=None):
         """Get Homogenous Acoustic Medium Relative time from either local_time or time.time()."""
@@ -380,13 +470,28 @@ class Nm3SimulatorController:
         #unique_id, network_message_json_bytes = self._socket.recv_multipart(zmq.DONTWAIT)  # blocking
         unique_id = msg[0]
         network_message_json_bytes = msg[1]
+        zmq_timestamp = float(msg[2].decode('utf-8'))
 
         local_received_time = time.time()
-        _debug_print("NetworkPacket received at: " + str(local_received_time - self._startup_time))
+        _debug_print("NetworkPacket transmitted at: " + str(zmq_timestamp) + " received at: " + str(local_received_time - self._startup_time))
         network_message_json_str = network_message_json_bytes.decode('utf-8')
         network_message_jason = json.loads(network_message_json_str)
 
         # _debug_print("Network Packet received from: " + str(unique_id) + " -- " + network_message_json_str)
+
+
+        if "TimePacket" in network_message_jason:
+            # Quick Turnaround
+            time_packet = TimePacket.from_json(network_message_jason["TimePacket"])
+            time_packet.server_arrival_time = local_received_time
+            #time_packet.client_transmit_time = zmq_timestamp
+
+            time_packet.server_transmit_time = time.time()
+            new_network_message_jason = {"TimePacket": time_packet.json()}
+            new_network_message_json_str = json.dumps(new_network_message_jason)
+
+            self._socket.send_multipart([unique_id, new_network_message_json_str.encode('utf-8'), str(time.time()).encode('utf-8')])
+
 
         if not self.has_nm3_simulator_node(unique_id):
             self.add_nm3_simulator_node(unique_id)
@@ -437,7 +542,7 @@ class Nm3SimulatorController:
         socket_id, network_packet_json_str = self.next_scheduled_network_packet(time.time())
         while socket_id:
             # _debug_print("Sending scheduled network packet: " + str(socket_id) + " - " + new_json_str)
-            self._socket.send_multipart([socket_id, network_packet_json_str.encode('utf-8')])
+            self._socket.send_multipart([socket_id, network_packet_json_str.encode('utf-8'), str(time.time()).encode('utf-8')])
             sent_time = time.time()
             _debug_print("NetworkPacket sent at: " + str(sent_time - self._startup_time))
             # Get next scheduled network Packet
@@ -558,8 +663,8 @@ class Nm3VirtualModem:
         self._socket = None
         self._socket_poller = None
 
-        # NTP Offset to synchronise timestamps
-        self._ntp_offset = 0.0
+        # Offset to synchronise times
+        self._hamr_time_offset = 0.0
 
         self._local_address = local_address
 
@@ -606,28 +711,20 @@ class Nm3VirtualModem:
         self._depth = depth
         self._position_information_updated = True
 
-    def get_ntp_update(self):
-        """Get NTP update."""
-        client = ntplib.NTPClient()
-        try:
-            response = client.request('0.pool.ntp.org')
-            self._ntp_offset = response.offset
-        except Exception:
-            print("Failed to get NTP info")
 
     def get_hamr_time(self, local_time=None):
         """Get Homogenous Acoustic Medium Relative time from either local_time or time.time()."""
         if local_time:
-            hamr_time = self._ntp_offset + local_time
+            hamr_time = self._hamr_time_offset + local_time
             return hamr_time
         else:
-            hamr_time = self._ntp_offset + time.time()
+            hamr_time = self._hamr_time_offset + time.time()
             return hamr_time
 
     def get_local_time(self, hamr_time=None):
         """Get local time from Homogenous Acoustic Medium Relative time or time.time()."""
         if hamr_time:
-            local_time = hamr_time - self._ntp_offset
+            local_time = hamr_time - self._hamr_time_offset
             return local_time
         else:
             return time.time()
@@ -651,6 +748,8 @@ class Nm3VirtualModem:
             self._socket_poller = zmq.Poller()
             self._socket_poller.register(self._socket, zmq.POLLIN)
 
+            self.send_time_packet()
+
         while True:
             if self._position_information_updated:
                 # Send positional information update
@@ -668,15 +767,29 @@ class Nm3VirtualModem:
 
             # Poll the socket for incoming "acoustic" messages
             #_debug_print("Checking socket poller")
-            sockets = dict(self._socket_poller.poll(0))
+            sockets = dict(self._socket_poller.poll(1))
             if self._socket in sockets:
-                network_message_json_bytes = self._socket.recv(zmq.DONTWAIT)
+                msg = self._socket.recv_multipart(zmq.DONTWAIT)
+                network_message_json_bytes = msg[0]
+                zmq_timestamp = float(msg[1].decode('utf-8'))
+
                 self._local_received_time = time.time()
-                _debug_print("NetworkPacket received at: " + str(self._local_received_time-self._startup_time))
+                _debug_print("NetworkPacket transmitted at: " + str(zmq_timestamp) + " received at: " + str(self._local_received_time-self._startup_time))
                 network_message_json_str = network_message_json_bytes.decode('utf-8')
                 network_message_jason = json.loads(network_message_json_str)
 
                # _debug_print("Network Packet received: " + network_message_json_str)
+
+                if "TimePacket" in network_message_jason:
+                    # Process the TimePacket
+                    time_packet = TimePacket.from_json(network_message_jason["TimePacket"])
+                    time_packet.client_arrival_time = self._local_received_time
+                    #time_packet.server_transmit_time = zmq_timestamp
+                    self._hamr_time_offset = time_packet.calculate_offset()
+
+                    print(time_packet.to_string())
+
+                    print("TimePacket offset: " + str(self._hamr_time_offset))
 
                 if "AcousticPacket" in network_message_jason:
                     # Process the AcousticPacket
@@ -699,6 +812,15 @@ class Nm3VirtualModem:
 
 
 
+    def send_time_packet(self):
+        """Create and send a TimePacket to determine offset time."""
+        time_packet = TimePacket()
+        time_packet.client_transmit_time = time.time()
+        jason = {"TimePacket": time_packet.json()}
+        json_string = json.dumps(jason)
+        self._socket.send_multipart([json_string.encode('utf-8'), str(time.time()).encode('utf-8')])
+
+        return
 
 
     def send_acoustic_packet(self, acoustic_packet: AcousticPacket):
@@ -706,7 +828,7 @@ class Nm3VirtualModem:
         Returns time sent"""
         jason = { "AcousticPacket": acoustic_packet.json() }
         json_string = json.dumps(jason)
-        self._socket.send(json_string.encode('utf-8'))
+        self._socket.send_multipart([json_string.encode('utf-8'), str(time.time()).encode('utf-8')])
 
         self._local_sent_time = time.time()
         _debug_print("NetworkPacket sent at: " + str(self._local_sent_time-self._startup_time))
@@ -720,7 +842,7 @@ class Nm3VirtualModem:
         Returns time sent"""
         jason = { "NodePacket": node_packet.json() }
         json_string = json.dumps(jason)
-        self._socket.send(json_string.encode('utf-8'))
+        self._socket.send_multipart([json_string.encode('utf-8'), str(time.time()).encode('utf-8')])
 
         self._local_sent_time = time.time()
         _debug_print("NetworkPacket sent at: " + str(self._local_sent_time-self._startup_time))
@@ -1204,8 +1326,6 @@ def main():
         nm3_simulator_controller = Nm3SimulatorController(
             network_address=network_address, network_port=network_port)
 
-        #nm3_simulator_controller.get_ntp_update()
-
         nm3_simulator_controller.start()
 
     #
@@ -1230,8 +1350,6 @@ def main():
                                     position_xy=position_xy,
                                     depth=depth)
 
-        #nm3_modem.get_ntp_update()
-
         nm3_modem.run()
     #
     # Headless Virtual NM3 Modems Mode
@@ -1251,8 +1369,6 @@ def main():
                                     position_xy=position_xy,
                                     depth=depth)
 
-        #nm3_modem.get_ntp_update()
-
         nm3_modem.run()
 
     #
@@ -1270,8 +1386,6 @@ def main():
                                         local_address=address,
                                         position_xy=position_xy,
                                         depth=depth)
-
-            #nm3_modem.get_ntp_update()
 
             nm3_modem.run()
 
