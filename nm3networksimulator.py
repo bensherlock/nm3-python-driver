@@ -360,17 +360,17 @@ class Nm3SimulatorController:
         self._ntp_offset = 0.0
 
         # Polling version
-        #self._socket_poller = None
+        self._socket_poller = None
 
         # Async version
-        self._socket_stream = None
+        #self._socket_stream = None
         #self._socket_loop = None
 
         self._nm3_simulator_nodes = {} # Map unique_id to node
 
         self._scheduled_network_packets = []
 
-        self._startup_time = 1602256464 #time.time()
+        self._startup_time = time.time()
 
     def __call__(self):
         return self
@@ -473,7 +473,7 @@ class Nm3SimulatorController:
         zmq_timestamp = float(msg[2].decode('utf-8'))
 
         local_received_time = time.time()
-        _debug_print("NetworkPacket transmitted at: " + str(zmq_timestamp) + " received at: " + str(local_received_time - self._startup_time))
+        _debug_print("NetworkPacket (len=" + str(len(msg)) + ") from " + str(unique_id) + " received at: " + str(local_received_time))
         network_message_json_str = network_message_json_bytes.decode('utf-8')
         network_message_jason = json.loads(network_message_json_str)
 
@@ -535,18 +535,21 @@ class Nm3SimulatorController:
                                                  new_network_message_json_str)
                     # IOLoop set the callback
                     #IOLoop.instance().call_at(local_transmit_time, self.check_for_packets_to_send)
+            #for s in self._scheduled_network_packets:
+            #    print(s)
+
 
 
     def check_for_packets_to_send(self):
         """Check for packets to send."""
         socket_id, network_packet_json_str = self.next_scheduled_network_packet(time.time())
         while socket_id:
-            # _debug_print("Sending scheduled network packet: " + str(socket_id) + " - " + new_json_str)
+            #_debug_print("Sending scheduled network packet: " + str(socket_id) + " - " + network_packet_json_str)
             self._socket.send_multipart([socket_id, network_packet_json_str.encode('utf-8'), str(time.time()).encode('utf-8')])
             sent_time = time.time()
-            _debug_print("NetworkPacket sent at: " + str(sent_time - self._startup_time))
+            _debug_print("NetworkPacket to " + str(socket_id)  + "sent at: " + str(sent_time))
             # Get next scheduled network Packet
-            socket_id, network_packet = self.next_scheduled_network_packet(time.time())
+            socket_id, network_packet_json_str = self.next_scheduled_network_packet(time.time())
 
     def start(self):
         """Start the simulation. Bind to the address and port ready for
@@ -567,6 +570,8 @@ class Nm3SimulatorController:
             socket_string = "tcp://" + self._network_address + ":"+ str(self._network_port)
             print("Binding to: " + socket_string)
             self._socket.bind(socket_string)
+
+            #print("HWM:" + str(self._socket.hwm))
 
             # Polling version
             self._socket_poller = zmq.Poller()
@@ -594,9 +599,14 @@ class Nm3SimulatorController:
             # _debug_print("Checking socket poller")
             sockets = dict(self._socket_poller.poll(1))
             if self._socket in sockets:
-                #unique_id, network_message_json_bytes = self._socket.recv_multipart(zmq.DONTWAIT) #  blocking
-                msg = self._socket.recv_multipart(zmq.DONTWAIT)  # blocking
-                self.on_recv(msg)
+                more_messages = True
+                while more_messages:
+                    try:
+                        #unique_id, network_message_json_bytes = self._socket.recv_multipart(zmq.DONTWAIT) #  blocking
+                        msg = self._socket.recv_multipart(zmq.DONTWAIT)  # blocking
+                        self.on_recv(msg)
+                    except zmq.ZMQError:
+                        more_messages = False
 
             # Get next scheduled network Packet
             self.check_for_packets_to_send()
@@ -747,7 +757,6 @@ class Nm3VirtualModem:
                               + str(self._network_port))
             self._socket_poller = zmq.Poller()
             self._socket_poller.register(self._socket, zmq.POLLIN)
-
             self.send_time_packet()
 
         while True:
@@ -769,32 +778,39 @@ class Nm3VirtualModem:
             #_debug_print("Checking socket poller")
             sockets = dict(self._socket_poller.poll(1))
             if self._socket in sockets:
-                msg = self._socket.recv_multipart(zmq.DONTWAIT)
-                network_message_json_bytes = msg[0]
-                zmq_timestamp = float(msg[1].decode('utf-8'))
+                more_messages = True
+                while more_messages:
+                    try:
+                        msg = self._socket.recv_multipart(zmq.DONTWAIT)
 
-                self._local_received_time = time.time()
-                _debug_print("NetworkPacket transmitted at: " + str(zmq_timestamp) + " received at: " + str(self._local_received_time-self._startup_time))
-                network_message_json_str = network_message_json_bytes.decode('utf-8')
-                network_message_jason = json.loads(network_message_json_str)
+                        network_message_json_bytes = msg[0]
+                        zmq_timestamp = float(msg[1].decode('utf-8'))
 
-               # _debug_print("Network Packet received: " + network_message_json_str)
+                        self._local_received_time = time.time()
+                        _debug_print("NetworkPacket (len=" + str(len(msg)) + ") from Controller received at: " + str(self._local_received_time))
+                        network_message_json_str = network_message_json_bytes.decode('utf-8')
+                        network_message_jason = json.loads(network_message_json_str)
 
-                if "TimePacket" in network_message_jason:
-                    # Process the TimePacket
-                    time_packet = TimePacket.from_json(network_message_jason["TimePacket"])
-                    time_packet.client_arrival_time = self._local_received_time
-                    #time_packet.server_transmit_time = zmq_timestamp
-                    self._hamr_time_offset = time_packet.calculate_offset()
+                        _debug_print("Network Packet received: " + network_message_json_str)
 
-                    print(time_packet.to_string())
+                        if "TimePacket" in network_message_jason:
+                            # Process the TimePacket
+                            time_packet = TimePacket.from_json(network_message_jason["TimePacket"])
+                            time_packet.client_arrival_time = self._local_received_time
+                            #time_packet.server_transmit_time = zmq_timestamp
+                            self._hamr_time_offset = time_packet.calculate_offset()
 
-                    print("TimePacket offset: " + str(self._hamr_time_offset))
+                            print(time_packet.to_string())
 
-                if "AcousticPacket" in network_message_jason:
-                    # Process the AcousticPacket
-                    acoustic_packet = AcousticPacket.from_json(network_message_jason["AcousticPacket"])
-                    self.process_acoustic_packet(acoustic_packet)
+                            print("TimePacket offset: " + str(self._hamr_time_offset))
+
+                        if "AcousticPacket" in network_message_jason:
+                            # Process the AcousticPacket
+                            acoustic_packet = AcousticPacket.from_json(network_message_jason["AcousticPacket"])
+                            self.process_acoustic_packet(acoustic_packet)
+
+                    except zmq.ZMQError:
+                        more_messages = False
 
             # Check for timeout if awaiting an Ack
             #_debug_print("Checking ack status")
@@ -819,7 +835,8 @@ class Nm3VirtualModem:
         jason = {"TimePacket": time_packet.json()}
         json_string = json.dumps(jason)
         self._socket.send_multipart([json_string.encode('utf-8'), str(time.time()).encode('utf-8')])
-
+        self._local_sent_time = time.time()
+        _debug_print("NetworkPacket to Controller sent at: " + str(self._local_sent_time))
         return
 
 
@@ -831,7 +848,7 @@ class Nm3VirtualModem:
         self._socket.send_multipart([json_string.encode('utf-8'), str(time.time()).encode('utf-8')])
 
         self._local_sent_time = time.time()
-        _debug_print("NetworkPacket sent at: " + str(self._local_sent_time-self._startup_time))
+        _debug_print("NetworkPacket to Controller sent at: " + str(self._local_sent_time))
         if self._local_received_time:
             _debug_print("-Turnaround: " + str(self._local_sent_time-self._local_received_time))
 
@@ -845,7 +862,7 @@ class Nm3VirtualModem:
         self._socket.send_multipart([json_string.encode('utf-8'), str(time.time()).encode('utf-8')])
 
         self._local_sent_time = time.time()
-        _debug_print("NetworkPacket sent at: " + str(self._local_sent_time-self._startup_time))
+        _debug_print("NetworkPacket to Controller sent at: " + str(self._local_sent_time))
 
         return self._local_sent_time
 
