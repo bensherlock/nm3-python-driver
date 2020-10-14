@@ -27,7 +27,7 @@
 # OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 # SOFTWARE.
 #
-"""NM V3 Logger using the Nm3 driver. """
+"""NM3 Acoustic Modem Logger using the Nm3 driver. """
 
 import argparse
 from datetime import datetime
@@ -100,10 +100,10 @@ def main():
     port = cmdline_args.port
     filenameroot = cmdline_args.filenameroot
 
-    # Serial Port is opened with a 100ms timeout for reading.
+    # Serial Port is opened with a 100ms timeout for reading - non-blocking.
     #serial_port = serial.Serial(port, 9600, 8, serial.PARITY_NONE, serial.STOPBITS_ONE, 0.1)
     with serial.Serial(port, 9600, 8, serial.PARITY_NONE, serial.STOPBITS_ONE, 0.1) as serial_port:
-        nm3_modem = Nm3(serial_port)
+        nm3_modem = Nm3(input_stream=serial_port, output_stream=serial_port)
 
         #addr = nm3_modem.get_address()
         #print('Get Address=' + '{:03d}'.format(addr))
@@ -154,7 +154,7 @@ def main():
         
         
             # Periodically poll the serial port for bytes
-            nm3_modem.poll_receiver_blocking() # blocking on first byte (or timeout)
+            #nm3_modem.poll_receiver_blocking() # blocking on first byte (or timeout)
             #nm3_modem.poll_receiver() # non-blocking returns immediately if no bytes ready to read.
 
             # Periodically process any bytes received

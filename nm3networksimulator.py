@@ -51,6 +51,9 @@ import argparse
 import copy
 import json
 import math
+from nm3driver import Nm3
+from nm3driver import MessagePacket
+from queue import Queue
 import serial
 import time
 from typing import Tuple, Union
@@ -654,6 +657,8 @@ class Nm3VirtualModem:
 
     ACOUSTIC_STATES = (ACOUSTIC_STATE_IDLE, ACOUSTIC_STATE_WAIT_ACK)
 
+    BYTE_PARSER_TIMEOUT = 0.100
+
 
     def __init__(self, input_stream, output_stream,
                  network_address=None, network_port=None, local_address: int =255, position_xy=(0.0,0.0), depth=10.0):
@@ -679,6 +684,7 @@ class Nm3VirtualModem:
         self._local_address = local_address
 
         # Parser variables
+        self._last_byte_time = None
         self._current_byte_counter = 0
         self._current_integer = 0
 
@@ -979,6 +985,11 @@ class Nm3VirtualModem:
 
     def process_bytes(self, some_bytes: bytes):
         """Process bytes in the state machine and act accordingly."""
+        if not self._last_byte_time or (time.time() > (self._last_byte_time + Nm3VirtualModem.BYTE_PARSER_TIMEOUT)):
+            self._simulator_state = self.SIMULATOR_STATE_IDLE
+
+        self._last_byte_time = time.time()
+
         for b in some_bytes:
             if self._simulator_state == self.SIMULATOR_STATE_IDLE:
                 if bytes([b]).decode('utf-8') == '$':
@@ -1275,6 +1286,93 @@ class TtyWrapper:
     def _poll_stdin(self):
         if self._stdin:
             self._line = self._stdin.readline()
+            sys.stdout.write(self._line) # echo to console
+
+class BufferedIOQueueWrapper:
+    """Wraps a Queue as IO with Read and Write binary functions."""
+
+    def __init__(self):
+        self._the_queue = Queue()
+
+    def readable(self):
+        return True
+
+    def read(self, n = -1):
+        """Read up to n bytes"""
+        the_bytes = []
+        while not self._the_queue.empty() and (n == -1 or len(the_bytes) < n):
+            the_bytes.append(self._the_queue.get())
+
+        return bytes(the_bytes)
+
+    def writable(self):
+        return True
+
+    def write(self, the_bytes: bytes):
+        """Returns the number of bytes written."""
+        for b in the_bytes:
+            self._the_queue.put(b)
+
+        return len(the_bytes)
+
+    def flush(self):
+        """Nothing to flush to."""
+        pass
+
+class BinaryToTextStream:
+
+    def __init__(self, output_text_stream):
+        self._stream = output_text_stream
+
+    def __getattr__(self, attr_name):
+        return getattr(self._stream, attr_name)
+
+    def writable(self):
+        return self._stream.writable()
+
+    def write(self, data):
+
+        self._stream.write(data.decode('utf-8'))
+        self._stream.flush()
+
+    def flush(self):
+        self._stream.flush()
+
+
+class TimestampTextStreamFilter:
+    """Intercepts a text stream and adds a timestamp at the beginning of each line."""
+
+    def __init__(self, stream):
+        self._stream = stream
+        self._timestamp_next_time = True
+
+    def __getattr__(self, attr_name):
+        return getattr(self._stream, attr_name)
+
+    def write(self, data):
+        # Print timestamp first
+        for c in data:
+            if self._timestamp_next_time:
+                self._timestamp_next_time = False
+                timestamp_str = "[%d-%02d-%02d %02d:%02d:%02d] " % time.localtime()[:6]
+                self._stream.write(timestamp_str)
+
+            if c == '\n':
+                self._timestamp_next_time = True
+                self._stream.write("\n")
+            else:
+                self._stream.write(c)
+
+        #self._stream.write(data)
+        self._stream.flush()
+
+
+    def flush(self):
+        self._stream.flush()
+
+
+
+
 
 
 
@@ -1351,7 +1449,11 @@ def main():
     elif mode == "terminal":
         input_stream = sys.stdin.buffer # bytes from a piped input
         if sys.stdin.isatty():
+            sys.stdout = TimestampTextStreamFilter(sys.stdout) # Adds a timestamp to beginning of every line
+            #sys.stderr = TimestampStreamFilter(sys.stderr)  # Adds a timestamp to beginning of every line
             input_stream = TtyWrapper(sys.stdin) # wrapped to grab lines and convert to bytes
+
+        output_stream = BinaryToTextStream(sys.stdout)
 
         print("Starting NM3 Virtual Terminal Modem")
         print("zmq version: " + zmq.zmq_version())
@@ -1360,7 +1462,7 @@ def main():
 
         # input_stream, output_stream, network_address=None, network_port=None, local_address=255, position_xy=(0.0,0.0), depth=10.0):
         nm3_modem = Nm3VirtualModem(input_stream=input_stream,
-                                    output_stream=sys.stdout.buffer,
+                                    output_stream=output_stream,
                                     network_address=network_address,
                                     network_port=network_port,
                                     local_address=address,
@@ -1405,6 +1507,51 @@ def main():
                                         depth=depth)
 
             nm3_modem.run()
+
+    #
+    # NM3 Periodic Beacon Broadcast on a Virtual Modem Modem
+    #
+    elif mode == "beacon":
+
+        # Pipes
+        outgoing_stream = BufferedIOQueueWrapper()
+        incoming_stream = BufferedIOQueueWrapper()
+
+        nm3_driver = Nm3(input_stream=incoming_stream, output_stream=outgoing_stream)
+
+
+        # input_stream, output_stream, network_address=None, network_port=None, local_address=255, position_xy=(0.0,0.0), depth=10.0):
+        nm3_modem = Nm3VirtualModem(input_stream=outgoing_stream,
+                                    output_stream=incoming_stream,
+                                    network_address=network_address,
+                                    network_port=network_port,
+                                    local_address=address,
+                                    position_xy=position_xy,
+                                    depth=depth)
+        a_thread = Thread(target=nm3_modem.run)
+        a_thread.start()  #nm3_modem.run()
+
+
+        # Now loop
+        beacon_time = time.time()
+
+
+
+        while True:
+            if beacon_time < time.time():
+                timestamp_str = "%d-%02d-%02d %02d:%02d:%02d" % time.localtime()[:6]
+                message_string = "Beacon Message: " + timestamp_str
+                message_bytes = message_string.encode('utf-8')
+
+                nm3_driver.send_broadcast_message(message_bytes)
+                beacon_time = beacon_time + 60.0  # Every 60 seconds
+
+            nm3_driver.poll_receiver()
+            nm3_driver.process_incoming_buffer()
+            while nm3_driver.has_received_packet():
+                packet = nm3_driver.get_received_packet()
+                print("Packet received:" + str(packet.json()))
+
 
 
 
