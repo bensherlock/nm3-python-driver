@@ -1286,7 +1286,7 @@ class TtyWrapper:
     def _poll_stdin(self):
         if self._stdin:
             self._line = self._stdin.readline()
-            sys.stdout.write(self._line) # echo to console
+            sys.stdout.write("\033[94m" + self._line.rstrip() + "\033[0m" + "\n") # echo to console
 
 class BufferedIOQueueWrapper:
     """Wraps a Queue as IO with Read and Write binary functions."""
