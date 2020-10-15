@@ -53,6 +53,7 @@ import json
 import math
 from nm3driver import Nm3
 from nm3driver import MessagePacket
+from nm3logger import Nm3Logger
 from queue import Queue
 import serial
 import time
@@ -1394,7 +1395,7 @@ def main():
 
     # Mode
     cmdline_parser.add_argument('--mode',
-                                help='The operating mode: controller/terminal/headless/serial.')
+                                help='The operating mode: controller/terminal/headless/serial/beacon/logger.')
 
     # Serial Port
     cmdline_parser.add_argument('--serial_port', help='The serial port to connect to.')
@@ -1405,6 +1406,10 @@ def main():
     # Virtual Modem Node Position
     cmdline_parser.add_argument('--position', help="Node position as x,y,depth.", dest="position",
                                 type=node_position_parser)
+
+    # filenameroot for Nm3Logger
+    cmdline_parser.add_argument('--filename_root', help='The filename root to log to.')
+
 
     # Parse the command line
     cmdline_args = cmdline_parser.parse_args()
@@ -1426,6 +1431,10 @@ def main():
     address = 255
     if cmdline_args.address:
         address = cmdline_args.address
+
+    filename_root = "Nm3Log"
+    if cmdline_args.filename_root:
+        filename_root = cmdline_args.filename_root
 
 
     #
@@ -1552,8 +1561,31 @@ def main():
                 packet = nm3_driver.get_received_packet()
                 print("Packet received:" + str(packet.json()))
 
+    #
+    # NM3 Logger on a Virtual Modem
+    #
+    elif mode == "logger":
 
+        # Pipes
+        outgoing_stream = BufferedIOQueueWrapper()
+        incoming_stream = BufferedIOQueueWrapper()
 
+        nm3_driver = Nm3(input_stream=incoming_stream, output_stream=outgoing_stream)
+
+        # input_stream, output_stream, network_address=None, network_port=None, local_address=255, position_xy=(0.0,0.0), depth=10.0):
+        nm3_modem = Nm3VirtualModem(input_stream=outgoing_stream,
+                                    output_stream=incoming_stream,
+                                    network_address=network_address,
+                                    network_port=network_port,
+                                    local_address=address,
+                                    position_xy=position_xy,
+                                    depth=depth)
+        a_thread = Thread(target=nm3_modem.run)
+        a_thread.start()  # nm3_modem.run()
+
+        nm3_logger = Nm3Logger()
+
+        nm3_logger.start_logging(nm3_modem=nm3_driver, filename_root=filename_root)
 
 
 if __name__ == '__main__':
