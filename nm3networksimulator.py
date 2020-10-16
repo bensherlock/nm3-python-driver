@@ -9,6 +9,7 @@
 # MIT License
 #
 # Copyright (c) 2020 Benjamin Sherlock <benjamin.sherlock@ncl.ac.uk>
+# Copyright (c) 2020 Jeff Neasham
 #
 # Permission is hereby granted, free of charge, to any person obtaining a copy
 # of this software and associated documentation files (the "Software"), to deal
@@ -55,11 +56,12 @@ from nm3driver import Nm3
 from nm3driver import MessagePacket
 from nm3logger import Nm3Logger
 from queue import Queue
+import random
 import serial
+import sys
 import time
 from typing import Tuple, Union
-import sys
-import tornado
+#import tornado
 import zmq
 from zmq.eventloop.zmqstream import ZMQStream
 #from zmq.eventloop.ioloop import IOLoop
@@ -351,6 +353,154 @@ class AcousticPacket:
         return acoustic_packet
 
 
+class Nm3PropagationModelBase:
+    """Propagation Model for packet transmission between two nodes.
+    Extend this class and provide to the Controller."""
+
+    def calculate_propagation(self, nm3_simulator_source_node: Nm3SimulatorNode,
+                              nm3_simulator_destination_node: Nm3SimulatorNode,
+                              acoustic_packet: AcousticPacket = None):
+        """Calculate the propagation delay of acoustic packet from source to destination node.
+        Returns propagation_delay and probability. (probability will always be 1.0)."""
+
+        x0 = nm3_simulator_source_node.node_position_xy[0]
+        y0 = nm3_simulator_source_node.node_position_xy[1]
+        z0 = nm3_simulator_source_node.node_depth
+
+        x1 = nm3_simulator_destination_node.node_position_xy[0]
+        y1 = nm3_simulator_destination_node.node_position_xy[1]
+        z1 = nm3_simulator_destination_node.node_depth
+
+        # Please note: This is a **very** simplistic model to just get us started.
+        # Assuming no losses. And isovelocity. And no obstructions. And no multipath. And no noise.
+        # The joy of simulation.
+
+        straight_line_range = math.sqrt(
+            ((x1 - x0) * (x1 - x0)) + ((y1 - y0) * (y1 - y0)) + ((z1 - z0) * (z1 - z0)))
+        speed_of_sound = 1500.0
+        propagation_delay = straight_line_range / speed_of_sound
+
+        probability = 1.0
+
+        return propagation_delay, probability
+
+
+
+class Nm3PERPropagationModel(Nm3PropagationModelBase):
+    """Simplified packet delivery model specifically for the NM3 signals.
+    Note: This is a very simplistic model (overlooking complexities of propagation, refraction
+    and non-gaussian noise sources) and only provides indicative performance to support network
+    protocol development."""
+
+    def __init__(self):
+        # Constants
+
+        # NM3 Properties
+        self._nm3_source_level = 168.0          # source level in dB re 1uPa @ 1m
+        self._nm3_bandwidth = 8000.0            # signal bandwidth
+
+        # packet error rate PER vs SNR in dB (from simulations in severe multipath channel)
+        # Anything -2dB and below is considered 100% lost.
+        # Anything above 6dB is considered 100% successful
+        self._snr_vs_per_results = [(-2, 1.0), (-1, 0.8), (0, 0.4), (1, 0.23), (2, 0.09),
+                                    (3, 0.03), (4, 0.01), (5, 0.003), (6, 0.001)]
+
+        # Sound velocity
+        self._sound_velocity = 1520.0
+
+        # Alpha. Attenuation coefficient in dB/km at 28 kHz (e.g. 6 for North Sea Summer,
+        # 0.3 for Loch Ness Winter)
+        self._attenuation_alpha = 6.0
+
+        #  NSL. ambient noise spectral density in dB re 1uPa^2/Hz at Sea State 6
+        #  (see Wenz Curves at 28 kHz)
+        self._noise_spectral_density  = 50.0
+
+
+    @property
+    def sound_velocity(self):
+        return self._sound_velocity
+    
+    @sound_velocity.setter
+    def sound_velocity(self, sound_velocity):
+        self._sound_velocity = sound_velocity
+
+    @property
+    def attenuation_alpha(self):
+        return self._attenuation_alpha
+    
+    @attenuation_alpha.setter
+    def attenuation_alpha(self, attenuation_alpha):
+        self._attenuation_alpha = attenuation_alpha
+
+    @property
+    def noise_spectral_density(self):
+        return self._noise_spectral_density
+    
+    @noise_spectral_density.setter
+    def noise_spectral_density(self, noise_spectral_density):
+        self._noise_spectral_density = noise_spectral_density
+
+
+    def calculate_propagation(self, nm3_simulator_source_node: Nm3SimulatorNode,
+                              nm3_simulator_destination_node: Nm3SimulatorNode,
+                              acoustic_packet: AcousticPacket = None):
+        """Note: This is a very simplistic model (overlooking complexities of propagation,
+        refraction and non-gaussian noise sources) and only provides indicative performance to
+        support network protocol development."""
+
+        x0 = nm3_simulator_source_node.node_position_xy[0]
+        y0 = nm3_simulator_source_node.node_position_xy[1]
+        z0 = nm3_simulator_source_node.node_depth
+        source_depth = z0
+
+        x1 = nm3_simulator_destination_node.node_position_xy[0]
+        y1 = nm3_simulator_destination_node.node_position_xy[1]
+        z1 = nm3_simulator_destination_node.node_depth
+
+        straight_line_range = math.sqrt(
+            ((x1 - x0) * (x1 - x0)) + ((y1 - y0) * (y1 - y0)) + ((z1 - z0) * (z1 - z0)))
+
+        # calculate transmission + propagation delay
+        propagation_delay = straight_line_range / self._sound_velocity
+
+
+        # calculate transmission loss (free field spreading) TL
+        transmission_loss = 20.0 * math.log10(straight_line_range) + self._attenuation_alpha * straight_line_range * 0.001
+
+        # estimated noise power from ambient NL
+        noise_loss = self._noise_spectral_density + 10.0 * math.log10(self._nm3_bandwidth)
+
+        # calculate received SNR (SONAR equation)
+        received_snr = self._nm3_source_level - transmission_loss - noise_loss
+
+        # add crude depth dependence of transmitter (-6 dB on surface, ~0 at 10m, +3dB at 100m)
+        received_snr = received_snr + 3.0 * math.log10(source_depth + 0.1) - 3.0
+
+        # Search for packet error rate based on received SNR
+        #
+        # round SNR to nearest integer
+        rounded_snr = int(round(received_snr))
+        if rounded_snr < self._snr_vs_per_results[0][0]: # out of range?
+            probability_of_delivery = 0.0
+        elif rounded_snr > self._snr_vs_per_results[-1][0]:
+            probability_of_delivery = 1.0 # short range?
+        else:
+            # read PER from table and convert to Pd
+            start_snr = self._snr_vs_per_results[0][0]
+            per = self._snr_vs_per_results[rounded_snr - start_snr][1]
+            probability_of_delivery = 1.0 - per
+
+        #print("received_snr=" + "{:0.2f}".format(received_snr) \
+        #      + " propagation_delay=" +  "{:0.2f}".format(propagation_delay) \
+        #      + " probability_of_delivery=" +  "{:0.2f}".format(probability_of_delivery))
+
+        return propagation_delay, probability_of_delivery
+
+
+
+
+
 
 class Nm3SimulatorController:
     """NM3 Simulator Controller. """
@@ -372,12 +522,23 @@ class Nm3SimulatorController:
 
         self._nm3_simulator_nodes = {} # Map unique_id to node
 
+        self._nm3_propagation_model = Nm3PropagationModelBase() # Default model
+
         self._scheduled_network_packets = []
 
         self._startup_time = time.time()
 
     def __call__(self):
         return self
+
+
+    @property
+    def nm3_propagation_model(self) -> Nm3PropagationModelBase:
+        return self._nm3_propagation_model
+
+    @nm3_propagation_model.setter
+    def nm3_propagation_model(self, nm3_propagation_model: Nm3PropagationModelBase):
+        self._nm3_propagation_model = nm3_propagation_model
 
 
     def get_hamr_time(self, local_time=None):
@@ -429,9 +590,20 @@ class Nm3SimulatorController:
             self._nm3_simulator_nodes[unique_id] = nm3_simulator_node
 
     def calculate_propagation(self, nm3_simulator_source_node: Nm3SimulatorNode,
-                              nm3_simulator_destination_node: Nm3SimulatorNode):
+                              nm3_simulator_destination_node: Nm3SimulatorNode,
+                              acoustic_packet: AcousticPacket):
         """Calculate the propagation delay of acoustic packet from source to destination node.
-        Returns propagation_delay and probability. (probability will always be 1.0)."""
+        Uses the model provided by the user or a fallback isovelocity if model is None.
+        Returns propagation_delay and probability."""
+
+        if self._nm3_propagation_model:
+            return self._nm3_propagation_model.calculate_propagation(
+                nm3_simulator_source_node=nm3_simulator_source_node,
+                nm3_simulator_destination_node=nm3_simulator_destination_node,
+                acoustic_packet=acoustic_packet)
+
+        # Fallback
+
         x0 = nm3_simulator_source_node.node_position_xy[0]
         y0 = nm3_simulator_source_node.node_position_xy[1]
         z0  = nm3_simulator_source_node.node_depth
@@ -525,20 +697,26 @@ class Nm3SimulatorController:
                 if socket_id != unique_id:
                     # Get destination position Information
                     nm3_simulator_destination_node = self.get_nm3_simulator_node(socket_id)
+
+                    # Calculate propagation
+                    acoustic_packet.hamr_timestamp = hamr_received_time
                     propagation_delay, probability = self.calculate_propagation(
-                        nm3_simulator_source_node, nm3_simulator_destination_node)
+                        nm3_simulator_source_node, nm3_simulator_destination_node,
+                    acoustic_packet)
 
-                    # Calculate a transmit_time
-                    hamr_transmit_time = hamr_received_time + propagation_delay
-                    local_transmit_time = self.get_local_time(hamr_transmit_time)
+                    # Check probability
+                    if random.random() < probability:
+                        # Calculate a transmit_time
+                        hamr_transmit_time = hamr_received_time + propagation_delay
+                        local_transmit_time = self.get_local_time(hamr_transmit_time)
 
-                    acoustic_packet.hamr_timestamp = hamr_transmit_time
-                    new_network_message_jason = {"AcousticPacket": acoustic_packet.json()}
-                    new_network_message_json_str = json.dumps(new_network_message_jason)
-                    self.schedule_network_packet(local_transmit_time, socket_id,
-                                                 new_network_message_json_str)
-                    # IOLoop set the callback
-                    #IOLoop.instance().call_at(local_transmit_time, self.check_for_packets_to_send)
+                        acoustic_packet.hamr_timestamp = hamr_transmit_time
+                        new_network_message_jason = {"AcousticPacket": acoustic_packet.json()}
+                        new_network_message_json_str = json.dumps(new_network_message_jason)
+                        self.schedule_network_packet(local_transmit_time, socket_id,
+                                                     new_network_message_json_str)
+                        # IOLoop set the callback
+                        #IOLoop.instance().call_at(local_transmit_time, self.check_for_packets_to_send)
             #for s in self._scheduled_network_packets:
             #    print(s)
 
@@ -1445,10 +1623,12 @@ def main():
         print("Starting Controller")
         print("zmq version: " + zmq.zmq_version())
         print("pyzmq version: " + zmq.pyzmq_version())
-        print("tornado version: " + tornado.version)
 
         nm3_simulator_controller = Nm3SimulatorController(
             network_address=network_address, network_port=network_port)
+
+        nm3_propagation_model = Nm3PERPropagationModel()
+        nm3_simulator_controller.nm3_propagation_model = nm3_propagation_model
 
         nm3_simulator_controller.start()
 
@@ -1467,7 +1647,6 @@ def main():
         print("Starting NM3 Virtual Terminal Modem")
         print("zmq version: " + zmq.zmq_version())
         print("pyzmq version: " + zmq.pyzmq_version())
-        print("tornado version: " + tornado.version)
 
         # input_stream, output_stream, network_address=None, network_port=None, local_address=255, position_xy=(0.0,0.0), depth=10.0):
         nm3_modem = Nm3VirtualModem(input_stream=input_stream,
@@ -1486,7 +1665,6 @@ def main():
         print("Starting NM3 Virtual Headless Modem")
         print("zmq version: " + zmq.zmq_version())
         print("pyzmq version: " + zmq.pyzmq_version())
-        print("tornado version: " + tornado.version)
 
         # input_stream, output_stream, network_address=None, network_port=None, local_address=255, position_xy=(0.0,0.0), depth=10.0):
         nm3_modem = Nm3VirtualModem(input_stream=None,

@@ -261,16 +261,20 @@ def main():
 
 ### Acoustic Packet Propagation
 At the moment the Controller handles AcousticPacket propagation in a very overly simple way. 
-Assuming no losses. And isovelocity. And no obstructions. And no multipath. And no noise. 
+
+The basic approach in ```Nm3PropagationModelBase``` assumes no losses with isovelocity, no obstructions, no multipath, and no noise. 
 It simply calculates the expected arrival time based on a nominal speed of sound (1500 m/s) and 
-the straight line distance between the transmitting node and the receiving node. 
+the straight line distance between the transmitting node and the receiving node.
 
-This will be changed to add calculations to determine probability of successful packet arrival and demodulation, 
-these will be specific to the frequency band used by the NM3 and the duration of the packet. 
-However, this will still make assumptions of an open sea and no obstructions with no multipath arrivals. 
+A more detailed approach in ```Nm3PERPropagationModel``` makes a better approximation based on simulated packet error 
+rates for a given received SNR. A received SNR is estimated based on range, bandwidth, and simple loss calculations.
+This still makes assumption of an open sea and no obstructions. Note: This is a very simplistic model (overlooking 
+complexities of propagation, refraction and non-gaussian noise sources) and only provides indicative performance to 
+support network protocol development. 
 
-If you require more in-depth channel modelling then you are free to extend the Nm3SimulatorController class and alter the 
-```calculate_propagation``` function accordingly. 
+If you require more in-depth channel modelling then you are free to extend the ```Nm3PropagationModelBase``` class and 
+override the ```calculate_propagation``` function accordingly. Assign an instance of your model to the 
+```Nm3SimulatorController.nm3_propagation_model``` property.
 
 
 
