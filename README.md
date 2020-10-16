@@ -97,7 +97,7 @@ at midnight.
 ### Commandline application
 
 ```shell
-    python3 nm3logger.py /dev/ttyS1 Nm3Log
+python3 nm3logger.py /dev/ttyS1 Nm3Log
 ```
 
 ### In code
