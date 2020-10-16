@@ -39,7 +39,7 @@ def main():
     
     # Serial Port is opened with a 100ms timeout for reading.
     serial_port = serial.Serial('/dev/ttyS3', 9600, 8, serial.PARITY_NONE, serial.STOPBITS_ONE, 0.1)
-    nm3_modem = Nm3(serial_port)
+    nm3_modem = Nm3(input_stream=serial_port, output_stream=serial_port)
 
     addr = nm3_modem.get_address()
     print('Get Address=' + '{:03d}'.format(addr))
@@ -88,7 +88,7 @@ def main():
         nm3_modem.process_incoming_buffer()
 
         # Periodically check for received packets
-        if nm3_modem.has_received_packet():
+        while nm3_modem.has_received_packet():
             message_packet = nm3_modem.get_received_packet()
 
             payload_as_string = bytes(message_packet.packet_payload).decode('utf-8')

@@ -28,7 +28,7 @@
 # OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 # SOFTWARE.
 #
-"""NM V3 Read Log File created using the Nm3 driver. """
+"""NM3 Read Log File created using the Nm3 driver. """
 
 import argparse
 import sys
@@ -36,6 +36,7 @@ import os
 import csv
 from datetime import datetime
 import dateutil.parser
+from typing import List
 
 
 class NM3LogFileEntry:
@@ -132,7 +133,7 @@ class NM3LogFileEntry:
             self._payload_length = len(self._payload_bytes)
 
 
-def read_nm3_logfile(filename):
+def read_nm3_logfile(filename) -> List[NM3LogFileEntry]:
     """Read the given log file and return a list of Nm3LogEntries."""
     entries = []
 
