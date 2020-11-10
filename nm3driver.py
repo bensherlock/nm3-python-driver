@@ -46,14 +46,20 @@ class MessagePacket:
         PACKETTYPE_UNICAST: 'Unicast',
     }
 
+    NAMES_PACKETTYPE = {
+        'Broadcast': PACKETTYPE_BROADCAST,
+        'Unicast': PACKETTYPE_UNICAST,
+    }
+
     PACKETTYPES = (PACKETTYPE_BROADCAST, PACKETTYPE_UNICAST)
 
-    def __init__(self):
-        self._source_address = None
-        self._destination_address = None
-        self._packet_type = None
-        self._packet_payload = None
-        self._packet_timestamp_count = None
+    def __init__(self, source_address=None, destination_address=None, packet_type=None, packet_payload=None,
+                 packet_timestamp_count=None):
+        self._source_address = source_address
+        self._destination_address = destination_address
+        self._packet_type = packet_type
+        self._packet_payload = packet_payload
+        self._packet_timestamp_count = packet_timestamp_count
 
 
     def __call__(self):
@@ -136,6 +142,24 @@ class MessagePacket:
                  "PacketTimestampCount": self._packet_timestamp_count}
 
         return jason
+
+    @classmethod
+    def from_json(cls, jason):
+        """Constructs a MessagePacket from a json dictionary representation."""
+
+        # convert packet type name to packet Type
+        packet_type_name = jason.get("PacketType")
+        packet_type = None
+        if packet_type_name:
+            packet_type = cls.NAMES_PACKETTYPE.get(packet_type_name)
+
+        message_packet = cls(source_address=jason.get("SourceAddress"),
+                             destination_address=jason.get("DestinationAddress"),
+                             packet_type=packet_type,
+                             packet_payload=jason.get("PayloadBytes"),
+                             packet_timestamp_count=jason.get("PacketTimestampCount"))
+
+        return message_packet
 
 
 
@@ -618,9 +642,9 @@ class Nm3:
         time_int = int(time_string)
 
         # Convert the time value to a float seconds. T = time_int * 31.25E-6.
-        time = float(time_int) * 31.25E-6
+        timeofarrival = float(time_int) * 31.25E-6
 
-        return time
+        return timeofarrival
 
 
     def send_broadcast_message(self,
@@ -807,9 +831,9 @@ class Nm3:
         time_int = int(time_string)
 
         # Convert the time value to a float seconds. T = time_int * 31.25E-6.
-        time = float(time_int) * 31.25E-6
+        timeofarrival= float(time_int) * 31.25E-6
 
-        return time
+        return timeofarrival
 
 
     def poll_receiver(self):
