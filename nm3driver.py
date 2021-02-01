@@ -389,8 +389,8 @@ class Nm3ResponseParser:
 
             if (bytes([next_byte]).decode('utf-8') == '#') or (bytes([next_byte]).decode('utf-8') == '$'):
                 # Next state
-                self._current_bytes = []
-                self._current_byte_counter = 0
+                self._current_bytes = [next_byte]  # Include the '#' or '$' character.
+                self._current_byte_counter = 1
                 self._parser_state = self.PARSERSTATE_STRING
 
         elif self._parser_state == self.PARSERSTATE_STRING:
