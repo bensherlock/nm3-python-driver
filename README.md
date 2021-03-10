@@ -1,6 +1,6 @@
 # nm3-python-driver package
 
-A collection of drivers and utilities for easily working with NM3 underwater acoustic modems. 
+A collection of drivers and utilities for easily working with NM3 underwater acoustic modems. The modem has also colloquially been known as a 'Nanomodem'.
 Intended to get researchers/engineers up and running quickly so you can spend more effort on your application/science. 
 
 ## NM3 Underwater Acoustic Modem
