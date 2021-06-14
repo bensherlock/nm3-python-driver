@@ -30,7 +30,7 @@
 """Python driver for the NM3 over serial port."""
 
 from collections import deque
-from typing import Tuple, Union
+from typing import Tuple, Union, List
 import time
 
 
@@ -730,6 +730,100 @@ class Nm3:
 
         return rms_int, p2p_int, mm_int
 
+    def measure_local_noise_spectrum(self):
+        """Measure the local noise spectrum for a duration of around 2 seconds.
+        Returns bin count and FFT values in ADC units.
+        Returned bin count is equivalent to NFFT/2 + 1, the returned values occupy the positive frequency bins
+        from DC to Nyquist/2 inclusive.
+        Sampling frequency on the device is 160kHz, for NFFT=512 the bin width = 312.5Hz."""
+
+        timeout = 6.0  # 6 second fixed timeout
+
+        # Absorb any incoming bytes into the receive buffers to process later
+        self.poll_receiver()
+
+        response_parser = Nm3ResponseParser()
+
+        # Write the command to the serial port
+        cmd_string = '$S'
+        cmd_bytes = cmd_string.encode('utf-8')
+        # Check that it has written all the bytes. Return error if not.
+        if self._output_stream.write(cmd_bytes) != len(cmd_bytes):
+            print('Error writing command')
+            return -1
+
+        # Await the response
+        resp_bytes = deque()  # Create the queue object for first response
+        response_parser.reset()
+        awaiting_response = True
+        timeout_time = time.time() + Nm3.RESPONSE_TIMEOUT
+        while awaiting_response and (time.time() < timeout_time):
+            resp = self._input_stream.read()
+
+            if resp:
+                for b in resp:
+                    resp_bytes.append(b)
+
+            if resp_bytes:
+                while resp_bytes:
+                    b = resp_bytes.popleft()
+                    if response_parser.process(b):
+                        # Got a response
+                        awaiting_response = False
+                        break
+
+        if not response_parser.has_response():
+            return -1
+
+        # Expecting '$S\r\n' 4 bytes
+        resp_string = response_parser.get_last_response_string()
+        if not resp_string or len(resp_string) < 4 or resp_string[0:2] != '$S':  # E
+            return -1
+
+        # Now await the measurement after around 2 seconds
+        # Await the response
+        response_parser.reset()
+        awaiting_response = True
+        timeout_time = time.time() + timeout
+        while awaiting_response and (time.time() < timeout_time):
+            resp = self._input_stream.read()
+
+            if resp:
+                for b in resp:
+                    resp_bytes.append(b)
+
+            if resp_bytes:
+                while resp_bytes:
+                    b = resp_bytes.popleft()
+                    if response_parser.process(b):
+                        # Got a response
+                        awaiting_response = False
+                        break
+
+        if not response_parser.has_response():
+            return -1
+
+        #            0123456789012345678901234
+        # Expecting '#S12345,00000,11111,22222,33333,...,NNNNN\r\n'
+        resp_string = response_parser.get_last_response_string()
+        if not resp_string or len(resp_string) < 9 or resp_string[0:2] != '#S':  #
+            return -1
+
+        bincount_string = resp_string[2:7]
+        bincount_int = int(bincount_string)
+
+        # expected length = bincount_int*(5+1) + 9
+        if len(resp_string) < (bincount_int*(5+1) + 9):
+            return -1
+
+        binvalues = []
+        for i in range(bincount_int):
+            binvalue_string = resp_string[8+(i*6):8+(i*6)+5]
+            binvalue_int = int(binvalue_string)
+            binvalues.append(binvalue_int)
+
+        return bincount_int, binvalues
+
     def send_ping(self,
                   address: int,
                   timeout: float = 5.0) -> float:
@@ -818,6 +912,108 @@ class Nm3:
         timeofarrival = float(time_int) * 31.25E-6
 
         return timeofarrival
+
+    def send_ping_for_channel_impulse_response(self,
+                  address: int,
+                  timeout: float = 7.0):  # -> Tuple[float, int, List[int]]:
+        """Sends a ping to the addressed node and returns a normalised channel impulse response where 0-1 == 0->50000
+        and the one way time of flight in seconds from this device to the node address provided.
+        Returns, time of flight, bins count, bin values."""
+
+        # Checks on parameters
+        if address < 0 or address > 255:
+            print('Invalid address (0-255): ' + str(address))
+            return -1
+
+        # Absorb any incoming bytes into the receive buffers to process later
+        self.poll_receiver()
+
+        response_parser = Nm3ResponseParser()
+
+        # Write the command to the serial port
+        cmd_string = '$C' + '{:03d}'.format(address)
+        cmd_bytes = cmd_string.encode('utf-8')
+        # Check that it has written all the bytes. Return error if not.
+        if self._output_stream.write(cmd_bytes) != len(cmd_bytes):
+            print('Error writing command')
+            return -1
+
+        # Await the response
+        resp_bytes = deque()  # Create the queue object for first response
+        response_parser.reset()
+        awaiting_response = True
+        timeout_time = time.time() + Nm3.RESPONSE_TIMEOUT
+        while awaiting_response and (time.time() < timeout_time):
+            resp = self._input_stream.read()
+
+            if resp:
+                for b in resp:
+                    resp_bytes.append(b)
+
+            if resp_bytes:
+                while resp_bytes:
+                    b = resp_bytes.popleft()
+                    if response_parser.process(b):
+                        # Got a response
+                        awaiting_response = False
+                        break
+
+        if not response_parser.has_response():
+            return -1
+
+        # Expecting '$C255\r\n' 7 bytes
+        resp_string = response_parser.get_last_response_string()
+        if not resp_string or len(resp_string) < 5 or resp_string[0:2] != '$C':  # E
+            return -1
+
+        # Now await the range or TO after 4 seconds
+        # Await the response
+        response_parser.reset()
+        awaiting_response = True
+        timeout_time = time.time() + timeout
+        while awaiting_response and (time.time() < timeout_time):
+            resp = self._input_stream.read()
+
+            if resp:
+                for b in resp:
+                    resp_bytes.append(b)
+
+            if resp_bytes:
+                while resp_bytes:
+                    b = resp_bytes.popleft()
+                    if response_parser.process(b):
+                        # Got a response
+                        awaiting_response = False
+                        break
+
+        if not response_parser.has_response():
+            return -1
+
+        #            01234567890123456789
+        # Expecting '#C255T12345,12345,11111,22222,33333,...,NNNNN\r\n' or '#TO\r\n' ? or 5 bytes
+        resp_string = response_parser.get_last_response_string()
+        if not resp_string or len(resp_string) < 17 or resp_string[0:2] != '#C':  # TO
+            return -1
+
+        time_string = resp_string[6:11]
+        time_int = int(time_string)
+        # Convert the time value to a float seconds. T = time_int * 31.25E-6.
+        timeofarrival = float(time_int) * 31.25E-6
+
+        bincount_string = resp_string[12:17]
+        bincount_int = int(bincount_string)
+
+        # expected length = bincount_int*(5+1) + 19
+        if len(resp_string) < (bincount_int * (5 + 1) + 19):
+            return -1
+
+        binvalues = []
+        for i in range(bincount_int):
+            binvalue_string = resp_string[18 + (i * 6):18 + (i * 6) + 5]
+            binvalue_int = int(binvalue_string)
+            binvalues.append(binvalue_int)
+
+        return timeofarrival, bincount_int, binvalues
 
     def send_broadcast_message(self,
                                message_bytes: bytes) -> int:
