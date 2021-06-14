@@ -53,12 +53,13 @@ class MessagePacket:
     PACKETTYPES = (PACKETTYPE_BROADCAST, PACKETTYPE_UNICAST)
 
     def __init__(self, source_address=None, destination_address=None, packet_type=None, packet_payload=None,
-                 packet_timestamp_count=None):
+                 packet_timestamp_count=None, packet_lqi=None):
         self._source_address = source_address
         self._destination_address = destination_address
         self._packet_type = packet_type
         self._packet_payload = packet_payload
-        self._packet_timestamp_count = packet_timestamp_count
+        self._packet_timestamp_count = packet_timestamp_count  # Optional timestamp
+        self._packet_lqi = packet_lqi  # Optional link quality indicator (LQI)
 
     def __call__(self):
         return self
@@ -124,6 +125,15 @@ class MessagePacket:
         """Sets the packet timestamp count - an overflowing 32-bit counter at 24MHz."""
         self._packet_timestamp_count = packet_timestamp_count
 
+    @property
+    def packet_lqi(self):
+        """Gets the packet LQI - a number between 00 and 99 inclusive."""
+        return self._packet_lqi
+
+    @packet_lqi.setter
+    def packet_lqi(self, packet_lqi):
+        self._packet_lqi = packet_lqi
+
     def json(self):
         """Returns a json dictionary representation."""
         jason = {"SourceAddress": self._source_address,
@@ -131,7 +141,8 @@ class MessagePacket:
                  "PacketType": MessagePacket.PACKETTYPE_NAMES[self._packet_type],
                  "PayloadLength": len(self._packet_payload),
                  "PayloadBytes": self._packet_payload,
-                 "PacketTimestampCount": self._packet_timestamp_count}
+                 "PacketTimestampCount": self._packet_timestamp_count,
+                 "PacketLqi": self._packet_lqi}
 
         return jason
 
@@ -149,7 +160,8 @@ class MessagePacket:
                              destination_address=jason.get("DestinationAddress"),
                              packet_type=packet_type,
                              packet_payload=jason.get("PayloadBytes"),
-                             packet_timestamp_count=jason.get("PacketTimestampCount"))
+                             packet_timestamp_count=jason.get("PacketTimestampCount"),
+                             packet_lqi=jason.get("PacketLqi"))
 
         return message_packet
 
@@ -160,7 +172,7 @@ class MessagePacketParser:
 
     PARSERSTATE_IDLE, PARSERSTATE_TYPE, \
     PARSERSTATE_ADDRESS, PARSERSTATE_LENGTH, \
-    PARSERSTATE_PAYLOAD, PARSERSTATE_TIMESTAMPFLAG, PARSERSTATE_TIMESTAMP = range(7)
+    PARSERSTATE_PAYLOAD, PARSERSTATE_ADDENDUMFLAG, PARSERSTATE_TIMESTAMP, PARSERSTATE_LQI = range(8)
 
     PARSERSTATE_NAMES = {
         PARSERSTATE_IDLE: 'Idle',
@@ -168,13 +180,14 @@ class MessagePacketParser:
         PARSERSTATE_ADDRESS: 'Address',
         PARSERSTATE_LENGTH: 'Length',
         PARSERSTATE_PAYLOAD: 'Payload',
-        PARSERSTATE_TIMESTAMPFLAG: 'TimestampFlag',
+        PARSERSTATE_ADDENDUMFLAG: 'AddendumFlag',
         PARSERSTATE_TIMESTAMP: 'Timestamp',
+        PARSERSTATE_LQI: 'Lqi'
     }
 
     PARSERSTATES = (PARSERSTATE_IDLE, PARSERSTATE_TYPE,
                     PARSERSTATE_ADDRESS, PARSERSTATE_LENGTH,
-                    PARSERSTATE_PAYLOAD, PARSERSTATE_TIMESTAMPFLAG, PARSERSTATE_TIMESTAMP)
+                    PARSERSTATE_PAYLOAD, PARSERSTATE_ADDENDUMFLAG, PARSERSTATE_TIMESTAMP, PARSERSTATE_LQI)
 
     def __init__(self):
         self._parser_state = self.PARSERSTATE_IDLE
@@ -204,7 +217,13 @@ class MessagePacketParser:
         # '#B25500' + payload bytes + 'T' + timestamp + '\r\n'
         # '#U00' + payload bytes + 'T' + timestamp + '\r\n'
         # Where timestamp is a 10 digit (fixed width) number representing a 32-bit counter value 
-        # on a 24 MHz clock which is latched when the synch waveform arrives 
+        # on a 24 MHz clock which is latched when the synch waveform arrives
+        # Or for future release firmware versions (v1.1.0+)
+        # '#B25500' + payload bytes + 'Q' + lqi + '\r\n'
+        # '#U00' + payload bytes + 'Q' + lqi + '\r\n'
+        # And if we end up with mix and match addendums/addenda
+        # '#B25500' + payload bytes + 'Q' + lqi + 'T' + timestamp + '\r\n'
+        # '#U00' + payload bytes + 'T' + timestamp + 'Q' + lqi + '\r\n'
 
         return_flag = False
 
@@ -275,16 +294,25 @@ class MessagePacketParser:
 
             if self._current_byte_counter == 0:
                 # Completed this packet
-                self._parser_state = self.PARSERSTATE_TIMESTAMPFLAG
+                self._parser_state = self.PARSERSTATE_ADDENDUMFLAG
 
-        elif self._parser_state == self.PARSERSTATE_TIMESTAMPFLAG:
+        elif self._parser_state == self.PARSERSTATE_ADDENDUMFLAG:
 
+            # Timestamp Addendum
             if bytes([next_byte]).decode('utf-8') == 'T':
                 self._current_byte_counter = 10
                 self._current_integer = 0
                 self._parser_state = self.PARSERSTATE_TIMESTAMP
+
+            # LQI Addendum
+            elif bytes([next_byte]).decode('utf-8') == 'Q':
+                self._current_byte_counter = 2
+                self._current_integer = 0
+                self._parser_state = self.PARSERSTATE_LQI
+
+            # Unrecognised or no addendum
             else:
-                # No timestamp on this message. Completed Packet
+                # No recognised addendum on this message. Completed Packet
                 self._packet_queue.append(self._current_message_packet)
                 self._current_message_packet = None
                 return_flag = True
@@ -297,12 +325,22 @@ class MessagePacketParser:
             self._current_integer = (self._current_integer * 10) + int(bytes([next_byte]).decode('utf-8'))
 
             if self._current_byte_counter == 0:
-                # Completed this packet
+                # Completed this addendum
                 self._current_message_packet.packet_timestamp_count = self._current_integer
-                self._packet_queue.append(self._current_message_packet)
-                self._current_message_packet = None
-                return_flag = True
-                self._parser_state = self.PARSERSTATE_IDLE
+                # Back to checking for further addendums/addenda
+                self._parser_state = self.PARSERSTATE_ADDENDUMFLAG
+
+        elif self._parser_state == self.PARSERSTATE_LQI:
+            self._current_byte_counter = self._current_byte_counter - 1
+
+            # Append the next ascii string integer digit
+            self._current_integer = (self._current_integer * 10) + int(bytes([next_byte]).decode('utf-8'))
+
+            if self._current_byte_counter == 0:
+                # Completed this addendum
+                self._current_message_packet.packet_lqi = self._current_integer
+                # Back to checking for further addendums/addenda
+                self._parser_state = self.PARSERSTATE_ADDENDUMFLAG
 
         else:
             # Unknown state
@@ -545,6 +583,94 @@ class Nm3:
         voltage = float(adc_int) * 15.0 / 65536.0
 
         return voltage
+
+    def measure_local_ambient_noise(self):
+        """Measure the local ambient noise for a duration of around 1 second.
+        Returns RMS, P2P (peak-to-peak) and MM (mean magnitude) values in ADC units.
+        rms_int, p2p_int, mm_int"""
+
+        timeout = 2.0  # 2 second fixed timeout
+
+        # Absorb any incoming bytes into the receive buffers to process later
+        self.poll_receiver()
+
+        response_parser = Nm3ResponseParser()
+
+        # Write the command to the serial port
+        cmd_string = '$N'
+        cmd_bytes = cmd_string.encode('utf-8')
+        # Check that it has written all the bytes. Return error if not.
+        if self._output_stream.write(cmd_bytes) != len(cmd_bytes):
+            print('Error writing command')
+            return -1
+
+        # Await the response
+        resp_bytes = deque()  # Create the queue object for first response
+        response_parser.reset()
+        awaiting_response = True
+        timeout_time = time.time() + Nm3.RESPONSE_TIMEOUT
+        while awaiting_response and (time.time() < timeout_time):
+            resp = self._input_stream.read()
+
+            if resp:
+                for b in resp:
+                    resp_bytes.append(b)
+
+            if resp_bytes:
+                while resp_bytes:
+                    b = resp_bytes.popleft()
+                    if response_parser.process(b):
+                        # Got a response
+                        awaiting_response = False
+                        break
+
+        if not response_parser.has_response():
+            return -1
+
+        # Expecting '$N\r\n' 4 bytes
+        resp_string = response_parser.get_last_response_string()
+        if not resp_string or len(resp_string) < 4 or resp_string[0:2] != '$N':  # E
+            return -1
+
+        # Now await the measurement after around 1 second
+        # Await the response
+        response_parser.reset()
+        awaiting_response = True
+        timeout_time = time.time() + timeout
+        while awaiting_response and (time.time() < timeout_time):
+            resp = self._input_stream.read()
+
+            if resp:
+                for b in resp:
+                    resp_bytes.append(b)
+
+            if resp_bytes:
+                while resp_bytes:
+                    b = resp_bytes.popleft()
+                    if response_parser.process(b):
+                        # Got a response
+                        awaiting_response = False
+                        break
+
+        if not response_parser.has_response():
+            return -1
+
+        #            0123456789012345678901234
+        # Expecting '#NR123456P123456M123456\r\n' 25 bytes
+        resp_string = response_parser.get_last_response_string()
+        if not resp_string or len(resp_string) < 25 or resp_string[0:2] != '#N':  #
+            return -1
+
+        rms_string = resp_string[3:9]
+        rms_int = int(rms_string)
+
+        p2p_string = resp_string[10:16]
+        p2p_int = int(p2p_string)
+
+        mm_string = resp_string[17:23]
+        mm_int = int(mm_string)
+
+        return rms_int, p2p_int, mm_int
 
     def send_ping(self,
                   address: int,
