@@ -452,6 +452,64 @@ class Nm3:
     def __call__(self):
         return self
 
+    def query_status(self):
+        """Query the modem status ($? command).
+        Returns the address and battery voltage.
+        In newer firmware versions (v1.1.0+) it also returns the semantic version number and the build date."""
+
+        # Absorb any incoming bytes into the receive buffers to process later
+        self.poll_receiver()
+
+        response_parser = Nm3ResponseParser()
+
+        # Write the command to the serial port
+        cmd_string = '$?'
+        cmd_bytes = cmd_string.encode('utf-8')
+        # Check that it has written all the bytes. Return error if not.
+        if self._output_stream.write(cmd_bytes) != len(cmd_bytes):
+            print('Error writing command')
+            return -1
+
+        # Await the response
+        response_parser.reset()
+        awaiting_response = True
+        timeout_time = time.time() + Nm3.RESPONSE_TIMEOUT
+        while awaiting_response and (time.time() < timeout_time):
+            resp_bytes = self._input_stream.read()
+            for b in resp_bytes:
+                if response_parser.process(b):
+                    # Got a response
+                    awaiting_response = False
+                    break
+
+        if not response_parser.has_response():
+            return -1
+        #            0123456789012        012345678901234567890123456789012345678901234
+        # Expecting '#A255V21941\r\n' or '#A255V21941R001.001.000B2021-05-26T09:23:46\r\n'
+        resp_string = response_parser.get_last_response_string()
+        if not resp_string or len(resp_string) < 11 or resp_string[0:2] != '#A':
+            return -1
+
+        addr_string = resp_string[2:5]
+        addr_int = int(addr_string)
+
+        adc_string = resp_string[6:11]
+        adc_int = int(adc_string)
+
+        # Convert the ADC value to a float voltage. V = adc_int * 15 / 65536.
+        voltage = float(adc_int) * 15.0 / 65536.0
+
+        version_string = ''
+        build_date_string = ''
+
+        if len(resp_string) >= 23:
+            version_string = resp_string[12:23]
+
+        if len(resp_string) >= 43:
+            build_date_string = resp_string[24:43]
+
+        return addr_int, voltage, version_string, build_date_string
+
     def get_address(self) -> int:
         """Gets the NM3 Address (000-255)."""
 
