@@ -30,6 +30,7 @@
 """Python driver for the NM3 over serial port."""
 
 from collections import deque
+import struct
 from typing import Tuple, Union, List
 import time
 
@@ -781,8 +782,20 @@ class Nm3:
             return -1
 
         # Now await the measurement after around 2 seconds
+        # '#Snnnnnbbbbbbbbbbbbb\r\n Expected response is ascii count then binary data.
+        #
         # Await the response
-        response_parser.reset()
+        PARSERSTATE_IDLE, PARSERSTATE_HASH, PARSERSTATE_COUNT, PARSERSTATE_DATA = range(4)
+
+        parser_state = PARSERSTATE_IDLE
+        current_byte_counter = 5  # For ascii integer
+        current_integer = 0  # For ascii integer
+        current_data_bytes = []
+
+        data_count = 0
+        data_value_size = 2
+        data_values = []
+
         awaiting_response = True
         timeout_time = time.time() + timeout
         while awaiting_response and (time.time() < timeout_time):
@@ -795,34 +808,55 @@ class Nm3:
             if resp_bytes:
                 while resp_bytes:
                     b = resp_bytes.popleft()
-                    if response_parser.process(b):
-                        # Got a response
-                        awaiting_response = False
-                        break
 
-        if not response_parser.has_response():
+                    if parser_state == PARSERSTATE_IDLE:
+                        if bytes([b]).decode('utf-8') == '#':
+                            parser_state = PARSERSTATE_HASH
+                        pass
+                    elif parser_state == PARSERSTATE_HASH:
+                        if bytes([b]).decode('utf-8') == 'S':
+                            current_byte_counter = 5  # For ascii integer
+                            current_integer = 0  # For ascii integer
+
+                            parser_state = PARSERSTATE_COUNT
+                        pass
+                    elif parser_state == PARSERSTATE_COUNT:
+                        current_byte_counter = current_byte_counter - 1
+
+                        # Append the next ascii string integer digit
+                        current_integer = (current_integer * 10) + int(bytes([b]).decode('utf-8'))
+
+                        if current_byte_counter == 0:
+                            data_count = current_integer
+                            current_integer = 0
+                            current_byte_counter = data_count * data_value_size
+                            current_data_bytes = []
+                            parser_state = PARSERSTATE_DATA
+
+                        pass
+                    elif parser_state == PARSERSTATE_DATA:
+                        current_byte_counter = current_byte_counter - 1
+
+                        current_data_bytes.append(b)
+
+                        if current_byte_counter == 0:
+                            # Convert the bytes into integers - https://docs.python.org/3/library/struct.html
+                            data_values = struct.unpack('<' + str(data_count) + 'H', bytes(bytearray(current_data_bytes)))
+
+                            parser_state = PARSERSTATE_IDLE
+                            # Got a response
+                            awaiting_response = False
+
+                        pass
+                    else:
+                        # Unknown state
+                        parser_state = PARSERSTATE_IDLE
+                        pass
+
+        if awaiting_response:
             return -1
 
-        #            0123456789012345678901234
-        # Expecting '#S12345,00000,11111,22222,33333,...,NNNNN\r\n'
-        resp_string = response_parser.get_last_response_string()
-        if not resp_string or len(resp_string) < 9 or resp_string[0:2] != '#S':  #
-            return -1
-
-        bincount_string = resp_string[2:7]
-        bincount_int = int(bincount_string)
-
-        # expected length = bincount_int*(5+1) + 9
-        if len(resp_string) < (bincount_int*(5+1) + 9):
-            return -1
-
-        binvalues = []
-        for i in range(bincount_int):
-            binvalue_string = resp_string[8+(i*6):8+(i*6)+5]
-            binvalue_int = int(binvalue_string)
-            binvalues.append(binvalue_int)
-
-        return bincount_int, binvalues
+        return data_count, data_values
 
     def send_ping(self,
                   address: int,
@@ -967,8 +1001,26 @@ class Nm3:
             return -1
 
         # Now await the range or TO after 4 seconds
+        # Now await the measurement after around 2 seconds
+        # #C255T12345Lnnnnnbbbbbbbbb\r\n' or '#TO\r\n' ? or 5 bytes
+        # Expected response is ascii count then binary data.
+        #
         # Await the response
-        response_parser.reset()
+        PARSERSTATE_IDLE, PARSERSTATE_HASH, PARSERSTATE_ADDRESS, PARSERSTATE_TIMEFLAG, PARSERSTATE_TIME, \
+        PARSERSTATE_COUNTFLAG, PARSERSTATE_COUNT, PARSERSTATE_DATA = range(8)
+
+        parser_state = PARSERSTATE_IDLE
+        current_byte_counter = 3  # For ascii integer
+        current_integer = 0  # For ascii integer
+        current_data_bytes = []
+
+        data_count = 0
+        data_value_size = 2
+        data_values = []
+
+        timeofflight_count = 0
+        address = 0
+
         awaiting_response = True
         timeout_time = time.time() + timeout
         while awaiting_response and (time.time() < timeout_time):
@@ -981,39 +1033,122 @@ class Nm3:
             if resp_bytes:
                 while resp_bytes:
                     b = resp_bytes.popleft()
-                    if response_parser.process(b):
-                        # Got a response
-                        awaiting_response = False
-                        break
 
-        if not response_parser.has_response():
+                    if parser_state == PARSERSTATE_IDLE:
+                        if bytes([b]).decode('utf-8') == '#':
+                            parser_state = PARSERSTATE_HASH
+                        pass
+
+                    elif parser_state == PARSERSTATE_HASH:
+                        if bytes([b]).decode('utf-8') == 'C':
+
+                            current_byte_counter = 3  # For ascii integer
+                            current_integer = 0  # For ascii integer
+                            parser_state = PARSERSTATE_ADDRESS
+
+                        else:
+                            # Error or timeout
+                            return -1
+                        pass
+
+                    elif parser_state == PARSERSTATE_ADDRESS:
+                        current_byte_counter = current_byte_counter - 1
+
+                        # Append the next ascii string integer digit
+                        current_integer = (current_integer * 10) + int(bytes([b]).decode('utf-8'))
+
+                        if current_byte_counter == 0:
+                            address = current_integer
+
+                            current_integer = 0
+                            current_byte_counter = data_count * data_value_size
+                            current_data_bytes = []
+                            parser_state = PARSERSTATE_TIMEFLAG
+
+                        pass
+
+                    elif parser_state == PARSERSTATE_TIMEFLAG:
+                        if bytes([b]).decode('utf-8') == 'T':
+
+                            current_byte_counter = 5  # For ascii integer
+                            current_integer = 0  # For ascii integer
+                            parser_state = PARSERSTATE_TIME
+
+                        else:
+                            # Error
+                            return -1
+                        pass
+
+                    elif parser_state == PARSERSTATE_TIME:
+                        current_byte_counter = current_byte_counter - 1
+
+                        # Append the next ascii string integer digit
+                        current_integer = (current_integer * 10) + int(bytes([b]).decode('utf-8'))
+
+                        if current_byte_counter == 0:
+                            timeofflight_count = current_integer
+
+                            current_integer = 0
+                            current_byte_counter = data_count * data_value_size
+                            current_data_bytes = []
+                            parser_state = PARSERSTATE_COUNTFLAG
+
+                        pass
+
+                    elif parser_state == PARSERSTATE_COUNTFLAG:
+                        if bytes([b]).decode('utf-8') == 'L':
+
+                            current_byte_counter = 5  # For ascii integer
+                            current_integer = 0  # For ascii integer
+                            parser_state = PARSERSTATE_COUNT
+
+                        else:
+                            # Error
+                            return -1
+                        pass
+
+                    elif parser_state == PARSERSTATE_COUNT:
+                        current_byte_counter = current_byte_counter - 1
+
+                        # Append the next ascii string integer digit
+                        current_integer = (current_integer * 10) + int(bytes([b]).decode('utf-8'))
+
+                        if current_byte_counter == 0:
+                            data_count = current_integer
+                            current_integer = 0
+                            current_byte_counter = data_count * data_value_size
+                            current_data_bytes = []
+                            parser_state = PARSERSTATE_DATA
+
+                        pass
+
+                    elif parser_state == PARSERSTATE_DATA:
+                        current_byte_counter = current_byte_counter - 1
+
+                        current_data_bytes.append(b)
+
+                        if current_byte_counter == 0:
+                            # Convert the bytes into integers - https://docs.python.org/3/library/struct.html
+                            data_values = struct.unpack('<' + str(data_count) + 'H',
+                                                        bytes(bytearray(current_data_bytes)))
+
+                            parser_state = PARSERSTATE_IDLE
+                            # Got a response
+                            awaiting_response = False
+
+                        pass
+                    else:
+                        # Unknown state
+                        parser_state = PARSERSTATE_IDLE
+                        pass
+
+        if awaiting_response:
             return -1
 
-        #            01234567890123456789
-        # Expecting '#C255T12345,12345,11111,22222,33333,...,NNNNN\r\n' or '#TO\r\n' ? or 5 bytes
-        resp_string = response_parser.get_last_response_string()
-        if not resp_string or len(resp_string) < 17 or resp_string[0:2] != '#C':  # TO
-            return -1
-
-        time_string = resp_string[6:11]
-        time_int = int(time_string)
         # Convert the time value to a float seconds. T = time_int * 31.25E-6.
-        timeofarrival = float(time_int) * 31.25E-6
+        timeofarrival = float(timeofflight_count) * 31.25E-6
 
-        bincount_string = resp_string[12:17]
-        bincount_int = int(bincount_string)
-
-        # expected length = bincount_int*(5+1) + 19
-        if len(resp_string) < (bincount_int * (5 + 1) + 19):
-            return -1
-
-        binvalues = []
-        for i in range(bincount_int):
-            binvalue_string = resp_string[18 + (i * 6):18 + (i * 6) + 5]
-            binvalue_int = int(binvalue_string)
-            binvalues.append(binvalue_int)
-
-        return timeofarrival, bincount_int, binvalues
+        return timeofarrival, data_count, data_values
 
     def send_broadcast_message(self,
                                message_bytes: bytes) -> int:
