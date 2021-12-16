@@ -54,13 +54,17 @@ class MessagePacket:
     PACKETTYPES = (PACKETTYPE_BROADCAST, PACKETTYPE_UNICAST)
 
     def __init__(self, source_address=None, destination_address=None, packet_type=None, packet_payload=None,
-                 packet_timestamp_count=None, packet_lqi=None):
+                 packet_lqi=None, packet_doppler=None,
+                 packet_timestamp_count=None):
         self._source_address = source_address
         self._destination_address = destination_address
         self._packet_type = packet_type
         self._packet_payload = packet_payload
-        self._packet_timestamp_count = packet_timestamp_count  # Optional timestamp
         self._packet_lqi = packet_lqi  # Optional link quality indicator (LQI)
+        self._packet_doppler = packet_doppler  # Optional Doppler tracking
+        self._packet_timestamp_count = packet_timestamp_count  # Optional timestamp
+
+        self._serial_string = None # The processed received uart string
 
     def __call__(self):
         return self
@@ -116,6 +120,25 @@ class MessagePacket:
         self._packet_payload = packet_payload
 
     @property
+    def packet_lqi(self):
+        """Gets the packet LQI - a number between 00 and 99 inclusive."""
+        return self._packet_lqi
+
+    @packet_lqi.setter
+    def packet_lqi(self, packet_lqi):
+        self._packet_lqi = packet_lqi
+
+
+    @property
+    def packet_doppler(self):
+        """Gets the packet Doppler - a number between +/-999 and 999 inclusive."""
+        return self._packet_doppler
+
+    @packet_doppler.setter
+    def packet_doppler(self, packet_doppler):
+        self._packet_doppler = packet_doppler
+
+    @property
     def packet_timestamp_count(self):
         """Gets the packet timestamp count - an overflowing 32-bit counter at 24MHz."""
         return self._packet_timestamp_count
@@ -126,14 +149,16 @@ class MessagePacket:
         """Sets the packet timestamp count - an overflowing 32-bit counter at 24MHz."""
         self._packet_timestamp_count = packet_timestamp_count
 
-    @property
-    def packet_lqi(self):
-        """Gets the packet LQI - a number between 00 and 99 inclusive."""
-        return self._packet_lqi
 
-    @packet_lqi.setter
-    def packet_lqi(self, packet_lqi):
-        self._packet_lqi = packet_lqi
+    @property
+    def serial_string(self) -> str:
+        return self._serial_string
+    
+    @serial_string.setter
+    def serial_string(self, serial_string: str):
+        self._serial_string = serial_string
+        
+
 
     def json(self):
         """Returns a json dictionary representation."""
@@ -142,8 +167,10 @@ class MessagePacket:
                  "PacketType": MessagePacket.PACKETTYPE_NAMES[self._packet_type],
                  "PayloadLength": len(self._packet_payload),
                  "PayloadBytes": self._packet_payload,
-                 "PacketTimestampCount": self._packet_timestamp_count,
-                 "PacketLqi": self._packet_lqi}
+                 "PacketLqi": self._packet_lqi,
+                 "PacketDoppler": self._packet_doppler,
+                 "PacketTimestampCount": self._packet_timestamp_count
+                 }
 
         return jason
 
@@ -161,8 +188,10 @@ class MessagePacket:
                              destination_address=jason.get("DestinationAddress"),
                              packet_type=packet_type,
                              packet_payload=jason.get("PayloadBytes"),
-                             packet_timestamp_count=jason.get("PacketTimestampCount"),
-                             packet_lqi=jason.get("PacketLqi"))
+                             packet_lqi=jason.get("PacketLqi"),
+                             packet_doppler=jason.get("PacketDoppler"),
+                             packet_timestamp_count=jason.get("PacketTimestampCount")
+                             )
 
         return message_packet
 
@@ -173,7 +202,7 @@ class MessagePacketParser:
 
     PARSERSTATE_IDLE, PARSERSTATE_TYPE, \
     PARSERSTATE_ADDRESS, PARSERSTATE_LENGTH, \
-    PARSERSTATE_PAYLOAD, PARSERSTATE_ADDENDUMFLAG, PARSERSTATE_TIMESTAMP, PARSERSTATE_LQI = range(8)
+    PARSERSTATE_PAYLOAD, PARSERSTATE_ADDENDUMFLAG, PARSERSTATE_LQI, PARSERSTATE_DOPPLER, PARSERSTATE_TIMESTAMP = range(9)
 
     PARSERSTATE_NAMES = {
         PARSERSTATE_IDLE: 'Idle',
@@ -182,19 +211,23 @@ class MessagePacketParser:
         PARSERSTATE_LENGTH: 'Length',
         PARSERSTATE_PAYLOAD: 'Payload',
         PARSERSTATE_ADDENDUMFLAG: 'AddendumFlag',
-        PARSERSTATE_TIMESTAMP: 'Timestamp',
-        PARSERSTATE_LQI: 'Lqi'
+        PARSERSTATE_LQI: 'Lqi',
+        PARSERSTATE_DOPPLER: 'Doppler',
+        PARSERSTATE_TIMESTAMP: 'Timestamp'
+
     }
 
     PARSERSTATES = (PARSERSTATE_IDLE, PARSERSTATE_TYPE,
                     PARSERSTATE_ADDRESS, PARSERSTATE_LENGTH,
-                    PARSERSTATE_PAYLOAD, PARSERSTATE_ADDENDUMFLAG, PARSERSTATE_TIMESTAMP, PARSERSTATE_LQI)
+                    PARSERSTATE_PAYLOAD, PARSERSTATE_ADDENDUMFLAG, PARSERSTATE_LQI, PARSERSTATE_DOPPLER, PARSERSTATE_TIMESTAMP)
 
     def __init__(self):
         self._parser_state = self.PARSERSTATE_IDLE
         self._current_message_packet = None
         self._current_byte_counter = 0
         self._current_integer = 0
+        self._current_integer_sign = 1
+        self._current_serial_string = None
         self._packet_queue = deque()
 
     def __call__(self):
@@ -207,6 +240,8 @@ class MessagePacketParser:
         self._current_message_packet = None
         self._current_byte_counter = 0
         self._current_integer = 0
+        self._current_integer_sign = 1
+        self._current_serial_string = None
 
     def process(self, next_byte) -> bool:
         """Process the next byte. Returns True if a packet completes on this byte."""
@@ -220,19 +255,25 @@ class MessagePacketParser:
         # Where timestamp is a 10 digit (fixed width) number representing a 32-bit counter value 
         # on a 24 MHz clock which is latched when the synch waveform arrives
         # Or for future release firmware versions (v1.1.0+)
-        # '#B25500' + payload bytes + 'Q' + lqi + '\r\n'
-        # '#U00' + payload bytes + 'Q' + lqi + '\r\n'
+        # '#B25500' + payload bytes + 'Q' + lqi + 'D' + doppler + '\r\n'
+        # '#U00' + payload bytes + 'Q' + lqi + 'D' + doppler + '\r\n'
         # And if we end up with mix and match addendums/addenda
-        # '#B25500' + payload bytes + 'Q' + lqi + 'T' + timestamp + '\r\n'
-        # '#U00' + payload bytes + 'T' + timestamp + 'Q' + lqi + '\r\n'
+        # '#B25500' + payload bytes + 'Q' + lqi + 'D' + doppler + 'T' + timestamp + '\r\n'
+        # '#U00' + payload bytes + 'T' + timestamp + 'Q' + lqi + 'D' + doppler + '\r\n'
 
         return_flag = False
 
         # print('next_byte: ' + bytes([next_byte]).decode('utf-8'))
 
+        if self._parser_state != self.PARSERSTATE_IDLE:
+            # Store bytes
+            self._current_serial_string = self._current_serial_string +  bytes([next_byte]).decode('utf-8')
+
+
         if self._parser_state == self.PARSERSTATE_IDLE:
 
             if bytes([next_byte]).decode('utf-8') == '#':
+                self._current_serial_string = '#'
                 # Next state
                 self._parser_state = self.PARSERSTATE_TYPE
 
@@ -301,19 +342,30 @@ class MessagePacketParser:
 
             # Timestamp Addendum
             if bytes([next_byte]).decode('utf-8') == 'T':
-                self._current_byte_counter = 10
+                self._current_byte_counter = 14
                 self._current_integer = 0
+                self._current_integer_sign = 1
                 self._parser_state = self.PARSERSTATE_TIMESTAMP
 
             # LQI Addendum
             elif bytes([next_byte]).decode('utf-8') == 'Q':
                 self._current_byte_counter = 2
                 self._current_integer = 0
+                self._current_integer_sign = 1
                 self._parser_state = self.PARSERSTATE_LQI
+
+            # Doppler Addendum
+            elif bytes([next_byte]).decode('utf-8') == 'D':
+                self._current_byte_counter = 4
+                self._current_integer = 0
+                self._current_integer_sign = 1
+                self._parser_state = self.PARSERSTATE_DOPPLER
 
             # Unrecognised or no addendum
             else:
                 # No recognised addendum on this message. Completed Packet
+                self._current_message_packet.serial_string = self._current_serial_string
+                self._current_serial_string = None
                 self._packet_queue.append(self._current_message_packet)
                 self._current_message_packet = None
                 return_flag = True
@@ -340,6 +392,24 @@ class MessagePacketParser:
             if self._current_byte_counter == 0:
                 # Completed this addendum
                 self._current_message_packet.packet_lqi = self._current_integer
+                # Back to checking for further addendums/addenda
+                self._parser_state = self.PARSERSTATE_ADDENDUMFLAG
+
+        elif self._parser_state == self.PARSERSTATE_DOPPLER:
+            self._current_byte_counter = self._current_byte_counter - 1
+
+            # Check for + or -
+            if bytes([next_byte]).decode('utf-8') == '+':
+                self._current_integer_sign = 1
+            elif bytes([next_byte]).decode('utf-8') == '-':
+                self._current_integer_sign = -1
+            else:
+                # Append the next ascii string integer digit
+                self._current_integer = (self._current_integer * 10) + (self._current_integer_sign * int(bytes([next_byte]).decode('utf-8')))
+
+            if self._current_byte_counter == 0:
+                # Completed this addendum
+                self._current_message_packet.packet_doppler = self._current_integer
                 # Back to checking for further addendums/addenda
                 self._parser_state = self.PARSERSTATE_ADDENDUMFLAG
 
@@ -949,10 +1019,11 @@ class Nm3:
 
     def send_ping_for_channel_impulse_response(self,
                   address: int,
+                  mode_magnitude_or_complex = 'M',
                   timeout: float = 7.0):  # -> Tuple[float, int, List[int]]:
         """Sends a ping to the addressed node and returns a normalised channel impulse response where 0-1 == 0->50000
         and the one way time of flight in seconds from this device to the node address provided.
-        Returns, time of flight, bins count, bin values."""
+        Returns, time of flight, data count, data values."""
 
         # Checks on parameters
         if address < 0 or address > 255:
@@ -965,7 +1036,7 @@ class Nm3:
         response_parser = Nm3ResponseParser()
 
         # Write the command to the serial port
-        cmd_string = '$C' + '{:03d}'.format(address)
+        cmd_string = '$C' + mode_magnitude_or_complex + '{:03d}'.format(address)
         cmd_bytes = cmd_string.encode('utf-8')
         # Check that it has written all the bytes. Return error if not.
         if self._output_stream.write(cmd_bytes) != len(cmd_bytes):
@@ -995,19 +1066,19 @@ class Nm3:
         if not response_parser.has_response():
             return -1
 
-        # Expecting '$C255\r\n' 7 bytes
+        # Expecting '$CM255\r\n' or '$CC255\r\n' 8 bytes
         resp_string = response_parser.get_last_response_string()
-        if not resp_string or len(resp_string) < 5 or resp_string[0:2] != '$C':  # E
+        if not resp_string or len(resp_string) < 6 or resp_string[0:2] != '$C':  # E
             return -1
 
-        # Now await the range or TO after 4 seconds
+        # Now await the range or TO after 4 seconds of propagation (processing takes longer)
         # Now await the measurement after around 2 seconds
-        # #C255T12345Lnnnnnbbbbbbbbb\r\n' or '#TO\r\n' ? or 5 bytes
+        # #CM255T12345Lnnnnnbbbbbbbbb\r\n' or '#TO\r\n' ? or 5 bytes
         # Expected response is ascii count then binary data.
         #
         # Await the response
-        PARSERSTATE_IDLE, PARSERSTATE_HASH, PARSERSTATE_ADDRESS, PARSERSTATE_TIMEFLAG, PARSERSTATE_TIME, \
-        PARSERSTATE_COUNTFLAG, PARSERSTATE_COUNT, PARSERSTATE_DATA = range(8)
+        PARSERSTATE_IDLE, PARSERSTATE_HASH, PARSERSTATE_MODE, PARSERSTATE_ADDRESS, PARSERSTATE_TIMEFLAG, PARSERSTATE_TIME, \
+        PARSERSTATE_COUNTFLAG, PARSERSTATE_COUNT, PARSERSTATE_DATA = range(9)
 
         parser_state = PARSERSTATE_IDLE
         current_byte_counter = 3  # For ascii integer
@@ -1041,6 +1112,21 @@ class Nm3:
 
                     elif parser_state == PARSERSTATE_HASH:
                         if bytes([b]).decode('utf-8') == 'C':
+                            parser_state = PARSERSTATE_MODE
+
+                        else:
+                            # Error or timeout
+                            return -1
+                        pass
+
+                    elif parser_state == PARSERSTATE_MODE:
+                        if bytes([b]).decode('utf-8') == 'M':
+
+                            current_byte_counter = 3  # For ascii integer
+                            current_integer = 0  # For ascii integer
+                            parser_state = PARSERSTATE_ADDRESS
+
+                        elif bytes([b]).decode('utf-8') == 'C':
 
                             current_byte_counter = 3  # For ascii integer
                             current_integer = 0  # For ascii integer
@@ -1129,8 +1215,17 @@ class Nm3:
 
                         if current_byte_counter == 0:
                             # Convert the bytes into integers - https://docs.python.org/3/library/struct.html
-                            data_values = struct.unpack('<' + str(data_count) + 'H',
-                                                        bytes(bytearray(current_data_bytes)))
+                            if mode_magnitude_or_complex == 'M':
+                                # Magnitudes so unsigned int (uint16_t)
+
+                                data_values = struct.unpack('<' + str(data_count) + 'H',
+                                                            bytes(bytearray(current_data_bytes)))
+
+                            elif mode_magnitude_or_complex == 'C':
+                                # Complex so signed int (int16_t)
+
+                                data_values = struct.unpack('<' + str(data_count) + 'h',
+                                                            bytes(bytearray(current_data_bytes)))
 
                             parser_state = PARSERSTATE_IDLE
                             # Got a response
@@ -1151,7 +1246,8 @@ class Nm3:
         return timeofarrival, data_count, data_values
 
     def send_broadcast_message(self,
-                               message_bytes: bytes) -> int:
+                               message_bytes: bytes,
+                               transmit_timestamp: int = None) -> int:
         """Sends a broadcast message of message_bytes. Maximum of 64 bytes.
         """
 
@@ -1168,6 +1264,10 @@ class Nm3:
         # Write the command to the serial port
         cmd_string = '$B' + '{:02d}'.format(len(message_bytes))
         cmd_bytes = cmd_string.encode('utf-8') + message_bytes
+        if transmit_timestamp:
+            timestamp_string = 'T{:014d}'.format(transmit_timestamp)
+            cmd_bytes = cmd_bytes + timestamp_string.encode('utf-8')
+
         # Check that it has written all the bytes. Return error if not.
         if self._output_stream.write(cmd_bytes) != len(cmd_bytes):
             print('Error writing command')
@@ -1199,7 +1299,8 @@ class Nm3:
 
     def send_unicast_message(self,
                              address: int,
-                             message_bytes: bytes) -> int:
+                             message_bytes: bytes,
+                             transmit_timestamp: int = None) -> int:
         """Sends a unicast message of message_bytes to address. Maximum of 64 bytes.
         """
 
@@ -1220,6 +1321,9 @@ class Nm3:
         # Write the command to the serial port
         cmd_string = '$U' + '{:03d}'.format(address) + '{:02d}'.format(len(message_bytes))
         cmd_bytes = cmd_string.encode('utf-8') + message_bytes
+        if transmit_timestamp:
+            timestamp_string = 'T{:014d}'.format(transmit_timestamp)
+            cmd_bytes = cmd_bytes + timestamp_string.encode('utf-8')
         # Check that it has written all the bytes. Return error if not.
         if self._output_stream.write(cmd_bytes) != len(cmd_bytes):
             print('Error writing command')
@@ -1254,7 +1358,8 @@ class Nm3:
     def send_unicast_message_with_ack(self,
                                       address: int,
                                       message_bytes: bytes,
-                                      timeout: float = 5.0) -> float:
+                                      timeout: float = 5.0,
+                                      transmit_timestamp: int = None) -> float:
         """Sends a unicast message of message_bytes to address. Maximum of 64 bytes.
            Waits for Ack from the remote node and returns the time of flight in seconds.
         """
@@ -1276,6 +1381,9 @@ class Nm3:
         # Write the command to the serial port
         cmd_string = '$M' + '{:03d}'.format(address) + '{:02d}'.format(len(message_bytes))
         cmd_bytes = cmd_string.encode('utf-8') + message_bytes
+        if transmit_timestamp:
+            timestamp_string = 'T{:014d}'.format(transmit_timestamp)
+            cmd_bytes = cmd_bytes + timestamp_string.encode('utf-8')
         # Check that it has written all the bytes. Return error if not.
         if self._output_stream.write(cmd_bytes) != len(cmd_bytes):
             print('Error writing command')
@@ -1344,6 +1452,78 @@ class Nm3:
         timeofarrival= float(time_int) * 31.25E-6
 
         return timeofarrival
+
+
+    def system_time_command(self, cmd_string):
+        """Internal function for system timer commands. Returns is_enabled and counter value."""
+
+        # Absorb any incoming bytes into the receive buffers to process later
+        self.poll_receiver()
+
+        response_parser = Nm3ResponseParser()
+
+        # Write the command to the serial port
+        #cmd_string = '$XTG'
+        cmd_bytes = cmd_string.encode('utf-8')
+        # Check that it has written all the bytes. Return error if not.
+        if self._output_stream.write(cmd_bytes) != len(cmd_bytes):
+            print('Error writing command')
+            return -1
+
+        # Await the response
+        response_parser.reset()
+        awaiting_response = True
+        timeout_time = time.time() + Nm3.RESPONSE_TIMEOUT
+        while awaiting_response and (time.time() < timeout_time):
+            resp_bytes = self._input_stream.read()
+            for b in resp_bytes:
+                if response_parser.process(b):
+                    # Got a response
+                    awaiting_response = False
+                    break
+
+        if not response_parser.has_response():
+            return -1
+        #            01234567890123456789
+        # Expecting '#XTetttttttttttttt\r\n'
+        resp_string = response_parser.get_last_response_string()
+        if not resp_string or len(resp_string) < 18 or resp_string[0:3] != '#XT':
+            return -1
+
+        enabled_string = resp_string[3:4]
+        time_count_string = resp_string[4:18]
+
+        enabled_flag = False
+        if enabled_string == 'E':
+            enabled_flag = True
+
+        time_count_int = int(time_count_string)
+
+        return enabled_flag, time_count_int
+
+
+    def get_system_timer_status(self):
+        """Get the status of the system timer. Returns is_enabled and counter value."""
+
+        return self.system_time_command(cmd_string='$XTG')
+
+
+    def enable_system_timer(self):
+        """Enable the system timer. Returns is_enabled and counter value."""
+
+        return self.system_time_command(cmd_string='$XTE')
+
+    def disable_system_timer(self):
+        """Disable the system timer. Returns is_enabled and counter value."""
+
+        return self.system_time_command(cmd_string='$XTD')
+
+    def clear_system_timer(self):
+        """Clears the system timer. Returns is_enabled and counter value."""
+
+        return self.system_time_command(cmd_string='$XTC')
+
+
 
     def poll_receiver(self):
         """Check the input_stream (non-blocking) and place bytes into incoming buffer for processing.
