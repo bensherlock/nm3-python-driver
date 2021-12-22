@@ -491,6 +491,9 @@ def main():
     # $C - Channel Impulse Response
     example_channel_impulse_response(nm3_modem=nm3_modem, remote_address=remote_address, plot_results=True)
 
+    # $N - Ambient Noise Measurement
+    example_noise_measurement(nm3_modem=nm3_modem)
+
     # $P - Ping
     example_ping(nm3_modem=nm3_modem, remote_address=remote_address)
 
