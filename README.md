@@ -14,6 +14,7 @@ The NM3 underwater acoustic modem was developed by the SEA Lab team at Newcastle
 ## The Utilities
 
 * [NM3 Driver](#nm3driverpy) 
+* [NM3 Examples](#nm3examplepy)
 * [NM3 Logger](#nm3loggerpy)
 * [NM3 Logs Reader](#nm3readlogfilepy)
 * [NM3 Standalone Virtual Modem](#nm3simulatorpy)
@@ -21,6 +22,8 @@ The NM3 underwater acoustic modem was developed by the SEA Lab team at Newcastle
 
 The nm3driver.py provides an interface to control the modem and to receive incoming messages without having to write 
 your own parser. 
+
+The nm3example.py provides standalone functions showing how to use many of the modem's features. 
 
 The nm3logger.py lets you simply store all incoming message packets in a csv file, which can then be read back in with 
 the nm3readlogfile.py for analysis of your data in Python. 
@@ -84,9 +87,12 @@ while True:
               + str(message_packet.packet_timestamp_count))
 ```
 
-Example usage is shown in nm3example.py for modem commands for range pinging, getting and setting address, reading 
-local battery level, and message transmission and receipt - broadcast, unicast, and unicast with ack.
+## nm3example.py
 
+Example usage is shown in nm3example.py for modem commands for range pinging, getting and setting address, reading 
+local battery level, and message transmission and receipt - broadcast, unicast, and unicast with ack. As well as the 
+newer features such as Noise and Spectrum Measurements, and Channel Impulse Responses. The new System Timer module is 
+also demonstrated for timestamping packet arrivals and timed transmission of packets. 
 
 ## nm3logger.py
 
