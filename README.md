@@ -9,7 +9,9 @@ The NM3 underwater acoustic modem was developed by the SEA Lab team at Newcastle
 
  - Project Homepage: https://github.com/bensherlock/nm3-python-driver/
  - USMART Homepage: https://research.ncl.ac.uk/usmart/
+ - Article "Ultra-Low-Cost and Ultra-Low-Power, Miniature Acoustic Modems Using Multipath Tolerant Spread-Spectrum Techniques": https://doi.org/10.3390/electronics11091446
  
+The NM3 technology has now been incorporated into a number of products including the Succorfish DELPHIS modem: https://succorfish.com/products/delphis/ 
 
 ## The Utilities
 
