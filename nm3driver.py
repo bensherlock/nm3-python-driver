@@ -263,23 +263,26 @@ class MessagePacketParser:
 
         return_flag = False
 
-        # print('next_byte: ' + bytes([next_byte]).decode('utf-8'))
+        # decoding_str = 'utf-8' #  If payload bytes are 0xaa etc they're invalid in utf-8
+        decoding_str = 'iso-8859-1'  # Shouldn't balk in the same way that utf-8 does
+
+        # print('next_byte: ' + bytes([next_byte]).decode(decoding_str))
 
         if self._parser_state != self.PARSERSTATE_IDLE:
             # Store bytes
-            self._current_serial_string = self._current_serial_string +  bytes([next_byte]).decode('utf-8')
+            self._current_serial_string = self._current_serial_string +  bytes([next_byte]).decode(decoding_str)
 
 
         if self._parser_state == self.PARSERSTATE_IDLE:
 
-            if bytes([next_byte]).decode('utf-8') == '#':
+            if bytes([next_byte]).decode(decoding_str) == '#':
                 self._current_serial_string = '#'
                 # Next state
                 self._parser_state = self.PARSERSTATE_TYPE
 
         elif self._parser_state == self.PARSERSTATE_TYPE:
 
-            if bytes([next_byte]).decode('utf-8') == 'B':
+            if bytes([next_byte]).decode(decoding_str) == 'B':
                 self._current_message_packet = MessagePacket()
                 self._current_message_packet.source_address = 0
                 self._current_message_packet.destination_address = None
@@ -291,7 +294,7 @@ class MessagePacketParser:
                 self._current_integer = 0
                 self._parser_state = self.PARSERSTATE_ADDRESS
 
-            elif bytes([next_byte]).decode('utf-8') == 'U':
+            elif bytes([next_byte]).decode(decoding_str) == 'U':
                 self._current_message_packet = MessagePacket()
                 self._current_message_packet.source_address = None
                 self._current_message_packet.destination_address = None
@@ -311,7 +314,7 @@ class MessagePacketParser:
             self._current_byte_counter = self._current_byte_counter - 1
 
             # Append the next ascii string integer digit
-            self._current_integer = (self._current_integer * 10) + int(bytes([next_byte]).decode('utf-8'))
+            self._current_integer = (self._current_integer * 10) + int(bytes([next_byte]).decode(decoding_str))
 
             if self._current_byte_counter == 0:
                 self._current_message_packet.source_address = self._current_integer
@@ -323,7 +326,7 @@ class MessagePacketParser:
             self._current_byte_counter = self._current_byte_counter - 1
 
             # Append the next ascii string integer digit
-            self._current_integer = (self._current_integer * 10) + int(bytes([next_byte]).decode('utf-8'))
+            self._current_integer = (self._current_integer * 10) + int(bytes([next_byte]).decode(decoding_str))
 
             if self._current_byte_counter == 0:
                 self._current_byte_counter = self._current_integer
@@ -341,21 +344,21 @@ class MessagePacketParser:
         elif self._parser_state == self.PARSERSTATE_ADDENDUMFLAG:
 
             # Timestamp Addendum
-            if bytes([next_byte]).decode('utf-8') == 'T':
+            if bytes([next_byte]).decode(decoding_str) == 'T':
                 self._current_byte_counter = 14
                 self._current_integer = 0
                 self._current_integer_sign = 1
                 self._parser_state = self.PARSERSTATE_TIMESTAMP
 
             # LQI Addendum
-            elif bytes([next_byte]).decode('utf-8') == 'Q':
+            elif bytes([next_byte]).decode(decoding_str) == 'Q':
                 self._current_byte_counter = 2
                 self._current_integer = 0
                 self._current_integer_sign = 1
                 self._parser_state = self.PARSERSTATE_LQI
 
             # Doppler Addendum
-            elif bytes([next_byte]).decode('utf-8') == 'D':
+            elif bytes([next_byte]).decode(decoding_str) == 'D':
                 self._current_byte_counter = 4
                 self._current_integer = 0
                 self._current_integer_sign = 1
@@ -375,7 +378,7 @@ class MessagePacketParser:
             self._current_byte_counter = self._current_byte_counter - 1
 
             # Append the next ascii string integer digit
-            self._current_integer = (self._current_integer * 10) + int(bytes([next_byte]).decode('utf-8'))
+            self._current_integer = (self._current_integer * 10) + int(bytes([next_byte]).decode(decoding_str))
 
             if self._current_byte_counter == 0:
                 # Completed this addendum
@@ -387,7 +390,7 @@ class MessagePacketParser:
             self._current_byte_counter = self._current_byte_counter - 1
 
             # Append the next ascii string integer digit
-            self._current_integer = (self._current_integer * 10) + int(bytes([next_byte]).decode('utf-8'))
+            self._current_integer = (self._current_integer * 10) + int(bytes([next_byte]).decode(decoding_str))
 
             if self._current_byte_counter == 0:
                 # Completed this addendum
@@ -399,13 +402,13 @@ class MessagePacketParser:
             self._current_byte_counter = self._current_byte_counter - 1
 
             # Check for + or -
-            if bytes([next_byte]).decode('utf-8') == '+':
+            if bytes([next_byte]).decode(decoding_str) == '+':
                 self._current_integer_sign = 1
-            elif bytes([next_byte]).decode('utf-8') == '-':
+            elif bytes([next_byte]).decode(decoding_str) == '-':
                 self._current_integer_sign = -1
             else:
                 # Append the next ascii string integer digit
-                self._current_integer = (self._current_integer * 10) + (self._current_integer_sign * int(bytes([next_byte]).decode('utf-8')))
+                self._current_integer = (self._current_integer * 10) + (self._current_integer_sign * int(bytes([next_byte]).decode(decoding_str)))
 
             if self._current_byte_counter == 0:
                 # Completed this addendum
@@ -473,11 +476,14 @@ class Nm3ResponseParser:
 
         return_flag = False
 
-        # print('next_byte: ' + bytes([next_byte]).decode('utf-8'))
+        # decoding_str = 'utf-8' #  If payload bytes are 0xaa etc they're invalid in utf-8
+        decoding_str = 'iso-8859-1'  # Shouldn't balk in the same way that utf-8 does
+
+        # print('next_byte: ' + bytes([next_byte]).decode(decoding_str))
 
         if self._parser_state == self.PARSERSTATE_IDLE:
 
-            if (bytes([next_byte]).decode('utf-8') == '#') or (bytes([next_byte]).decode('utf-8') == '$'):
+            if (bytes([next_byte]).decode(decoding_str) == '#') or (bytes([next_byte]).decode(decoding_str) == '$'):
                 # Next state
                 self._current_bytes = [next_byte]  # Include the '#' or '$' character.
                 self._current_byte_counter = 1
@@ -503,7 +509,7 @@ class Nm3ResponseParser:
         return self._has_response_flag
 
     def get_last_response_string(self):
-        return bytes(self._current_bytes).decode('utf-8')
+        return bytes(self._current_bytes).decode(decoding_str)
 
 
 class Nm3:
@@ -808,6 +814,9 @@ class Nm3:
         from DC to Nyquist/2 inclusive.
         Sampling frequency on the device is 160kHz, for NFFT=512 the bin width = 312.5Hz."""
 
+        # decoding_str = 'utf-8' #  If payload bytes are 0xaa etc they're invalid in utf-8
+        decoding_str = 'iso-8859-1'  # Shouldn't balk in the same way that utf-8 does
+
         timeout = 6.0  # 6 second fixed timeout
 
         # Absorb any incoming bytes into the receive buffers to process later
@@ -880,11 +889,11 @@ class Nm3:
                     b = resp_bytes.popleft()
 
                     if parser_state == PARSERSTATE_IDLE:
-                        if bytes([b]).decode('utf-8') == '#':
+                        if bytes([b]).decode(decoding_str) == '#':
                             parser_state = PARSERSTATE_HASH
                         pass
                     elif parser_state == PARSERSTATE_HASH:
-                        if bytes([b]).decode('utf-8') == 'S':
+                        if bytes([b]).decode(decoding_str) == 'S':
                             current_byte_counter = 5  # For ascii integer
                             current_integer = 0  # For ascii integer
 
@@ -894,7 +903,7 @@ class Nm3:
                         current_byte_counter = current_byte_counter - 1
 
                         # Append the next ascii string integer digit
-                        current_integer = (current_integer * 10) + int(bytes([b]).decode('utf-8'))
+                        current_integer = (current_integer * 10) + int(bytes([b]).decode(decoding_str))
 
                         if current_byte_counter == 0:
                             data_count = current_integer
@@ -1025,6 +1034,9 @@ class Nm3:
         and the one way time of flight in seconds from this device to the node address provided.
         Returns, time of flight, data count, data values."""
 
+        # decoding_str = 'utf-8' #  If payload bytes are 0xaa etc they're invalid in utf-8
+        decoding_str = 'iso-8859-1'  # Shouldn't balk in the same way that utf-8 does
+
         # Checks on parameters
         if address < 0 or address > 255:
             print('Invalid address (0-255): ' + str(address))
@@ -1106,12 +1118,12 @@ class Nm3:
                     b = resp_bytes.popleft()
 
                     if parser_state == PARSERSTATE_IDLE:
-                        if bytes([b]).decode('utf-8') == '#':
+                        if bytes([b]).decode(decoding_str) == '#':
                             parser_state = PARSERSTATE_HASH
                         pass
 
                     elif parser_state == PARSERSTATE_HASH:
-                        if bytes([b]).decode('utf-8') == 'C':
+                        if bytes([b]).decode(decoding_str) == 'C':
                             parser_state = PARSERSTATE_MODE
 
                         else:
@@ -1120,13 +1132,13 @@ class Nm3:
                         pass
 
                     elif parser_state == PARSERSTATE_MODE:
-                        if bytes([b]).decode('utf-8') == 'M':
+                        if bytes([b]).decode(decoding_str) == 'M':
 
                             current_byte_counter = 3  # For ascii integer
                             current_integer = 0  # For ascii integer
                             parser_state = PARSERSTATE_ADDRESS
 
-                        elif bytes([b]).decode('utf-8') == 'C':
+                        elif bytes([b]).decode(decoding_str) == 'C':
 
                             current_byte_counter = 3  # For ascii integer
                             current_integer = 0  # For ascii integer
@@ -1141,7 +1153,7 @@ class Nm3:
                         current_byte_counter = current_byte_counter - 1
 
                         # Append the next ascii string integer digit
-                        current_integer = (current_integer * 10) + int(bytes([b]).decode('utf-8'))
+                        current_integer = (current_integer * 10) + int(bytes([b]).decode(decoding_str))
 
                         if current_byte_counter == 0:
                             address = current_integer
@@ -1154,7 +1166,7 @@ class Nm3:
                         pass
 
                     elif parser_state == PARSERSTATE_TIMEFLAG:
-                        if bytes([b]).decode('utf-8') == 'T':
+                        if bytes([b]).decode(decoding_str) == 'T':
 
                             current_byte_counter = 5  # For ascii integer
                             current_integer = 0  # For ascii integer
@@ -1169,7 +1181,7 @@ class Nm3:
                         current_byte_counter = current_byte_counter - 1
 
                         # Append the next ascii string integer digit
-                        current_integer = (current_integer * 10) + int(bytes([b]).decode('utf-8'))
+                        current_integer = (current_integer * 10) + int(bytes([b]).decode(decoding_str))
 
                         if current_byte_counter == 0:
                             timeofflight_count = current_integer
@@ -1182,7 +1194,7 @@ class Nm3:
                         pass
 
                     elif parser_state == PARSERSTATE_COUNTFLAG:
-                        if bytes([b]).decode('utf-8') == 'L':
+                        if bytes([b]).decode(decoding_str) == 'L':
 
                             current_byte_counter = 5  # For ascii integer
                             current_integer = 0  # For ascii integer
@@ -1197,7 +1209,7 @@ class Nm3:
                         current_byte_counter = current_byte_counter - 1
 
                         # Append the next ascii string integer digit
-                        current_integer = (current_integer * 10) + int(bytes([b]).decode('utf-8'))
+                        current_integer = (current_integer * 10) + int(bytes([b]).decode(decoding_str))
 
                         if current_byte_counter == 0:
                             data_count = current_integer
