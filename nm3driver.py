@@ -509,6 +509,9 @@ class Nm3ResponseParser:
         return self._has_response_flag
 
     def get_last_response_string(self):
+        # decoding_str = 'utf-8' #  If payload bytes are 0xaa etc they're invalid in utf-8
+        decoding_str = 'iso-8859-1'  # Shouldn't balk in the same way that utf-8 does
+
         return bytes(self._current_bytes).decode(decoding_str)
 
 
