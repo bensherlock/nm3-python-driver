@@ -140,13 +140,13 @@ class MessagePacket:
 
     @property
     def packet_timestamp_count(self):
-        """Gets the packet timestamp count - an overflowing 32-bit counter at 24MHz."""
+        """Gets the packet timestamp count - a counter at 1MHz."""
         return self._packet_timestamp_count
 
     @packet_timestamp_count.setter
     def packet_timestamp_count(self,
                        packet_timestamp_count):
-        """Sets the packet timestamp count - an overflowing 32-bit counter at 24MHz."""
+        """Sets the packet timestamp count - a counter at 1MHz."""
         self._packet_timestamp_count = packet_timestamp_count
 
 
