@@ -98,14 +98,15 @@ class Nm3Logger:
             while nm3_modem.has_received_packet():
                 message_packet = nm3_modem.get_received_packet()
 
-                # payload_as_string = bytes(message_packet.packet_payload).decode('utf-8')
-                # print('Received a message packet: ' +
-                #      MessagePacket.PACKETTYPE_NAMES[message_packet.packet_type] +
-                #      ' src: ' + str(message_packet.source_address) + ' data: ' +
-                #      payload_as_string)
-
                 # Write to file
                 self.write_packet_line(logfile, message_packet, packet_id)
+
+                # Print to console
+                # payload_as_string = bytes(message_packet.packet_payload).decode('utf-8')
+                print('Received message packet: ' +
+                      MessagePacket.PACKETTYPE_NAMES[message_packet.packet_type] +
+                      ' src: ' + str(message_packet.source_address) +
+                      ' dest: ' + str(message_packet.destination_address))
 
                 packet_id = packet_id + 1
 
@@ -115,7 +116,10 @@ class Nm3Logger:
         """Write the text header line to the given file."""
         # Write the header row to the logfile
         # PacketId, Timestamp, PacketType (Broadcast/Unicast), Source Address, Destination Address,
-        # PayloadLength, PayloadBytes(hex encoded) \r\n
+        # PayloadLength, PayloadBytes(hex encoded)
+        # New Additions for V1.3 Firmware
+        # LQI, Doppler, TimestampCount
+        # \r\n
         the_file.write('PacketId,Timestamp,PacketType,SourceAddress,DestinationAddress,PayloadLength,')
 
         # Hex encoded payload bytes
@@ -124,15 +128,18 @@ class Nm3Logger:
             if i < 63:
                 the_file.write(',')
 
+        # V1.3 Additions
+        the_file.write(',LQI,Doppler,TimestampCount')
+
         # Newline
-        the_file.write('\r\n')
+        the_file.write('\n')
 
 
     def write_packet_line(self, the_file, the_packet, packet_id):
         """Write the text packet line to the given file."""
         # Write to file
         # PacketId, Timestamp, PacketType (Broadcast/Unicast), Source Address,
-        # Destination Address, PayloadLength, PayloadBytes(hex encoded) \r\n
+        # Destination Address, PayloadLength, PayloadBytes(hex encoded) \n
         the_file.write(str(packet_id) + ',')
         dt_str = datetime.utcnow().isoformat() + 'Z'
         the_file.write(dt_str + ',')
@@ -152,8 +159,19 @@ class Nm3Logger:
             if i < 63:
                 the_file.write(',')
 
+        # V1.3 Additions
+        # the_file.write(',LQI,Doppler,TimestampCount')
+        the_file.write(',')
+        the_file.write('{:02d}'.format(the_packet.packet_lqi))
+
+        the_file.write(',')
+        the_file.write('{:03d}'.format(the_packet.packet_doppler))
+
+        the_file.write(',')
+        the_file.write('{:014d}'.format(the_packet.packet_timestamp_count))
+
         # Newline
-        the_file.write('\r\n')
+        the_file.write('\n')
     
 
 
@@ -179,6 +197,9 @@ def main():
     #serial_port = serial.Serial(port, 9600, 8, serial.PARITY_NONE, serial.STOPBITS_ONE, 0.1)
     with serial.Serial(port, 9600, 8, serial.PARITY_NONE, serial.STOPBITS_ONE, 0.1) as serial_port:
         nm3_modem = Nm3(input_stream=serial_port, output_stream=serial_port)
+
+        # Enable System Timer
+        nm3_modem.enable_system_timer()
 
         nm3_logger = Nm3Logger()
 
