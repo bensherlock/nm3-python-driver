@@ -50,6 +50,10 @@ class NM3LogFileEntry:
         self._destination_address = None
         self._payload_length = None
         self._payload_bytes = None
+        # V1.4 Additions
+        self._lqi = None  # Optional link quality indicator (LQI)
+        self._doppler = None  # Optional Doppler tracking
+        self._timestamp_count = None  # Optional timestamp
 
     def __call__(self):
         return self
