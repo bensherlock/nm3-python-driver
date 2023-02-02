@@ -136,6 +136,32 @@ class NM3LogFileEntry:
         if self._payload_bytes:
             self._payload_length = len(self._payload_bytes)
 
+    @property
+    def packet_lqi(self) -> int:
+        """Gets the packet LQI"""
+        return self._packet_lqi
+
+    @packet_lqi.setter
+    def packet_lqi(self, packet_lqi: int):
+        self._packet_lqi = packet_lqi
+
+    @property
+    def packet_doppler(self) -> int:
+        """Gets the packet Doppler"""
+        return self._packet_doppler
+
+    @packet_doppler.setter
+    def packet_doppler(self, packet_doppler: int):
+        self._packet_doppler = packet_doppler
+
+    @property
+    def packet_timestamp_count(self) -> int:
+        return self._packet_timestamp_count
+
+    @packet_timestamp_count.setter
+    def packet_timestamp_count(self, packet_timestamp_count: int):
+        self._packet_timestamp_count = packet_timestamp_count
+
 
 def read_nm3_logfile(filename) -> List[NM3LogFileEntry]:
     """Read the given log file and return a list of Nm3LogEntries."""
@@ -167,6 +193,13 @@ def read_nm3_logfile(filename) -> List[NM3LogFileEntry]:
                 entry.destination_address = int(row[4]) if row[4] else None
                 payload_length = int(row[5])
                 entry.payload_bytes = [int(b, 0) for b in row[6:6 + payload_length]]
+
+                # V1.3 Additions
+                if len(row) > 70:
+                    entry.packet_lqi = int(row[70])
+                    entry.packet_doppler = int(row[71])
+                    entry.packet_timestamp_count = int(row[72])
+
                 entries.append(entry)
 
     return entries
